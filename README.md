@@ -78,20 +78,6 @@ Our plugin template uses centrally-managed packages. Simply add a `PackageVersio
 
 Using centrally-managed NuGet packages is crucial in regards to integration with library versions used in the ASF submodule, especially the `System.Composition.AttributedModel` which your plugin should always have in the ASF matching version. This also means that you don't have to (and actually shouldn't) specify versions for all of the libraries that ASF defines on its own in **[`Directory.Packages.props`](https://github.com/JustArchiNET/ArchiSteamFarm/blob/main/Directory.Packages.props)** (that you conveniently inherit from).
 
-### Renaming `MyAwesomePlugin`
-
-You might be interested in renaming `MyAwesomePlugin` project into the one that suits your plugin. For doing that, we recommend using our intuitive **[`tools/rename.sh`](https://github.com/JustArchiNET/ASF-PluginTemplate/blob/main/tools/rename.sh)** script, which you can call using your favourite POSIX sh compliant shell. It's also compatible with WSL.
-
-If for any reason you'd prefer to rename manually, we've tried to keep the minimum amount of references, and we're listing here all of the places you should keep in mind:
-- **[`MyAwesomePlugin.csproj`](https://github.com/JustArchiNET/ASF-PluginTemplate/blob/main/MyAwesomePlugin/MyAwesomePlugin.csproj)**, renaming should be enough.
-- **[`MyAwesomePlugin.cs`](https://github.com/JustArchiNET/ASF-PluginTemplate/blob/main/MyAwesomePlugin/MyAwesomePlugin.cs#L7-L14)**, rename along with `RepositoryName` property, `MyAwesomePlugin` class name and included references to it.
-- **[`MyAwesomePlugin`](https://github.com/JustArchiNET/ASF-PluginTemplate/tree/main/MyAwesomePlugin)** directory, which holds above files.
-- **[`MyAwesomePlugin.sln`](https://github.com/JustArchiNET/ASF-PluginTemplate/blob/main/MyAwesomePlugin.sln#L6)**, along with the update of `MyAwesomePlugin` reference in the `sln` file.
-- **[`MyAwesomePlugin.sln.DotSettings`](https://github.com/JustArchiNET/ASF-PluginTemplate/blob/main/MyAwesomePlugin.sln.DotSettings)**, renaming to match the `sln` file above should be enough.
-- **[`Directory.Build.props`](https://github.com/JustArchiNET/ASF-PluginTemplate/blob/main/Directory.Build.props#L5)**, in particular `<PluginName>MyAwesomePlugin</PluginName>` line.
-
-Nothing else should be required to the best of our knowledge.
-
 ### Need help?
 
 Feel free to ask in one of our **[support channels](https://github.com/JustArchiNET/ArchiSteamFarm/blob/main/.github/SUPPORT.md)**, where we'll be happy to offer you a helpful hand 😎.
