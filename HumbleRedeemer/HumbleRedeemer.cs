@@ -7,6 +7,7 @@ using System.Composition;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using ArchiSteamFarm.Core;
 using ArchiSteamFarm.Plugins.Interfaces;
@@ -22,14 +23,44 @@ namespace HumbleRedeemer;
 /// Holds parsed TPK (third-party key) data from a Humble Bundle order.
 /// </summary>
 internal sealed class HumbleTpkInfo {
-	internal required string HumanName { get; init; }
-	internal required string MachineName { get; init; }
-	internal uint SteamAppId { get; init; }
-	internal string? RedeemedKeyVal { get; init; }
-	internal bool IsExpired { get; init; }
-	internal bool SoldOut { get; init; }
-	internal IReadOnlyList<string> DisallowedCountries { get; init; } = [];
-	internal IReadOnlyList<string> ExclusiveCountries { get; init; } = [];
+	[JsonInclude]
+	[JsonPropertyName("GameKey")]
+	internal string GameKey { get; set; } = "";
+
+	[JsonInclude]
+	[JsonPropertyName("HumanName")]
+	internal string HumanName { get; set; } = "";
+
+	[JsonInclude]
+	[JsonPropertyName("MachineName")]
+	internal string MachineName { get; set; } = "";
+
+	[JsonInclude]
+	[JsonPropertyName("SteamAppId")]
+	internal uint SteamAppId { get; set; }
+
+	[JsonInclude]
+	[JsonPropertyName("RedeemedKeyVal")]
+	internal string? RedeemedKeyVal { get; set; }
+
+	[JsonInclude]
+	[JsonPropertyName("IsExpired")]
+	internal bool IsExpired { get; set; }
+
+	[JsonInclude]
+	[JsonPropertyName("SoldOut")]
+	internal bool SoldOut { get; set; }
+
+	[JsonInclude]
+	[JsonPropertyName("DisallowedCountries")]
+	internal List<string> DisallowedCountries { get; set; } = [];
+
+	[JsonInclude]
+	[JsonPropertyName("ExclusiveCountries")]
+	internal List<string> ExclusiveCountries { get; set; } = [];
+
+	[JsonConstructor]
+	internal HumbleTpkInfo() { }
 }
 
 #pragma warning disable CA1812 // ASF uses this class during runtime
@@ -113,148 +144,44 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 		if (orderKeys != null && orderKeys.Count > 0) {
 			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Successfully authenticated to HumbleBundle. Found {orderKeys.Count} orders.");
 
-			// Fetch all orders individually (reliable, but slower than bulk API)
-			Dictionary<string, JsonElement>? allOrders = await webHandler.GetAllOrdersIndividuallyAsync(orderKeys).ConfigureAwait(false);
+			// Load cached TPK data and determine which orders are new
+			HashSet<string> cachedGameKeys = new(botCache.CachedGameKeys, StringComparer.OrdinalIgnoreCase);
+			List<HumbleTpkInfo> steamTpks = new(botCache.CachedTpks);
+			List<string> newGameKeys = orderKeys.Where(key => !cachedGameKeys.Contains(key)).ToList();
 
-			if (allOrders != null && allOrders.Count > 0) {
-				// Extract Steam TPK data from tpkd_dict.all_tpks
-				List<HumbleTpkInfo> steamTpks = new();
-				int ordersWithKeys = 0;
+			if (steamTpks.Count > 0) {
+				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Loaded {steamTpks.Count} cached Steam TPKs from {cachedGameKeys.Count} orders");
+			}
 
-				foreach ((string orderKey, JsonElement orderData) in allOrders) {
-					try {
-						if (orderData.ValueKind != JsonValueKind.Object) {
-							continue;
-						}
+			if (newGameKeys.Count > 0) {
+				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Found {newGameKeys.Count} new orders to fetch (out of {orderKeys.Count} total)");
 
-						// Get tpkd_dict object by enumerating properties
-						// (cannot use TryGetProperty - not available in ASF's runtime)
-						JsonElement? tpkdDict = null;
+				// Fetch only new orders individually
+				Dictionary<string, JsonElement>? newOrders = await webHandler.GetAllOrdersIndividuallyAsync(newGameKeys).ConfigureAwait(false);
 
-						foreach (JsonProperty prop in orderData.EnumerateObject()) {
-							if (prop.Name.Equals("tpkd_dict", StringComparison.OrdinalIgnoreCase)) {
-								tpkdDict = prop.Value;
-								break;
-							}
-						}
+				if (newOrders != null && newOrders.Count > 0) {
+					int newTpkCount = 0;
 
-						if (!tpkdDict.HasValue || tpkdDict.Value.ValueKind != JsonValueKind.Object) {
-							continue;
-						}
-
-						// Get all_tpks array from tpkd_dict
-						JsonElement? allTpks = null;
-
-						foreach (JsonProperty prop in tpkdDict.Value.EnumerateObject()) {
-							if (prop.Name.Equals("all_tpks", StringComparison.OrdinalIgnoreCase)) {
-								allTpks = prop.Value;
-								break;
-							}
-						}
-
-						if (!allTpks.HasValue || allTpks.Value.ValueKind != JsonValueKind.Array) {
-							continue;
-						}
-
-						bool orderHasKeys = false;
-
-						foreach (JsonElement tpk in allTpks.Value.EnumerateArray()) {
-							if (tpk.ValueKind != JsonValueKind.Object) {
-								continue;
-							}
-
-							// Extract all relevant fields by enumerating
-							string? keyTypeStr = null;
-							string? redeemedKeyVal = null;
-							string? humanName = null;
-							string? machineName = null;
-							uint steamAppId = 0;
-							bool isExpired = false;
-							bool soldOut = false;
-							List<string> disallowedCountries = new();
-							List<string> exclusiveCountries = new();
-
-							foreach (JsonProperty prop in tpk.EnumerateObject()) {
-								switch (prop.Name) {
-									case "key_type" when prop.Value.ValueKind == JsonValueKind.String:
-										keyTypeStr = prop.Value.GetString();
-										break;
-									case "redeemed_key_val" when prop.Value.ValueKind == JsonValueKind.String:
-										redeemedKeyVal = prop.Value.GetString();
-										break;
-									case "human_name" when prop.Value.ValueKind == JsonValueKind.String:
-										humanName = prop.Value.GetString();
-										break;
-									case "machine_name" when prop.Value.ValueKind == JsonValueKind.String:
-										machineName = prop.Value.GetString();
-										break;
-									case "steam_app_id" when prop.Value.ValueKind == JsonValueKind.Number:
-										if (uint.TryParse(prop.Value.GetRawText(), out uint parsedAppId)) {
-											steamAppId = parsedAppId;
-										}
-
-										break;
-									case "is_expired":
-										isExpired = prop.Value.ValueKind == JsonValueKind.True;
-										break;
-									case "sold_out":
-										soldOut = prop.Value.ValueKind == JsonValueKind.True;
-										break;
-									case "disallowed_countries" when prop.Value.ValueKind == JsonValueKind.Array:
-										foreach (JsonElement country in prop.Value.EnumerateArray()) {
-											if (country.ValueKind == JsonValueKind.String) {
-												string? code = country.GetString();
-												if (!string.IsNullOrEmpty(code)) {
-													disallowedCountries.Add(code);
-												}
-											}
-										}
-
-										break;
-									case "exclusive_countries" when prop.Value.ValueKind == JsonValueKind.Array:
-										foreach (JsonElement country in prop.Value.EnumerateArray()) {
-											if (country.ValueKind == JsonValueKind.String) {
-												string? code = country.GetString();
-												if (!string.IsNullOrEmpty(code)) {
-													exclusiveCountries.Add(code);
-												}
-											}
-										}
-
-										break;
-								}
-							}
-
-							// Only process Steam keys
-							if (!string.Equals(keyTypeStr, "steam", StringComparison.OrdinalIgnoreCase)) {
-								continue;
-							}
-
-							steamTpks.Add(new HumbleTpkInfo {
-								HumanName = humanName ?? "Unknown",
-								MachineName = machineName ?? "unknown",
-								SteamAppId = steamAppId,
-								RedeemedKeyVal = redeemedKeyVal,
-								IsExpired = isExpired,
-								SoldOut = soldOut,
-								DisallowedCountries = disallowedCountries,
-								ExclusiveCountries = exclusiveCountries
-							});
-
-							orderHasKeys = true;
-						}
-
-						if (orderHasKeys) {
-							ordersWithKeys++;
-						}
-					} catch (Exception ex) {
-						ASF.ArchiLogger.LogGenericException(ex, $"[{bot.BotName}] Failed to parse tpkd_dict for order {orderKey}");
+					foreach ((string orderKey, JsonElement orderData) in newOrders) {
+						List<HumbleTpkInfo> orderTpks = ExtractSteamTpksFromOrder(bot.BotName, orderKey, orderData);
+						steamTpks.AddRange(orderTpks);
+						newTpkCount += orderTpks.Count;
 					}
+
+					ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Found {newTpkCount} new Steam TPKs from {newOrders.Count} new orders");
+
+					// Update cache with all known gamekeys and TPKs
+					botCache.CachedGameKeys = new List<string>(orderKeys);
+					botCache.CachedTpks = steamTpks;
+					await botCache.SaveAsync().ConfigureAwait(false);
+					ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Saved {steamTpks.Count} TPKs and {orderKeys.Count} gamekeys to cache");
 				}
+			} else {
+				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] No new orders found, using {steamTpks.Count} cached Steam TPKs");
+			}
 
-				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Found {steamTpks.Count} Steam TPKs across {ordersWithKeys} orders (out of {allOrders.Count} fetched)");
-
-				// Store TPK data for comparison when Steam login completes
+			if (steamTpks.Count > 0) {
+				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Total: {steamTpks.Count} Steam TPKs across {orderKeys.Count} orders");
 				BotHumbleTpks[bot] = steamTpks;
 			}
 		}
@@ -531,6 +458,134 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] === Keys will NOT be redeemed automatically ===");
 
 		await Task.CompletedTask.ConfigureAwait(false);
+	}
+
+	private static List<HumbleTpkInfo> ExtractSteamTpksFromOrder(string botName, string orderKey, JsonElement orderData) {
+		List<HumbleTpkInfo> tpks = new();
+
+		try {
+			if (orderData.ValueKind != JsonValueKind.Object) {
+				return tpks;
+			}
+
+			// Get tpkd_dict object by enumerating properties
+			// (cannot use TryGetProperty - not available in ASF's runtime)
+			JsonElement? tpkdDict = null;
+
+			foreach (JsonProperty prop in orderData.EnumerateObject()) {
+				if (prop.Name.Equals("tpkd_dict", StringComparison.OrdinalIgnoreCase)) {
+					tpkdDict = prop.Value;
+					break;
+				}
+			}
+
+			if (!tpkdDict.HasValue || tpkdDict.Value.ValueKind != JsonValueKind.Object) {
+				return tpks;
+			}
+
+			// Get all_tpks array from tpkd_dict
+			JsonElement? allTpks = null;
+
+			foreach (JsonProperty prop in tpkdDict.Value.EnumerateObject()) {
+				if (prop.Name.Equals("all_tpks", StringComparison.OrdinalIgnoreCase)) {
+					allTpks = prop.Value;
+					break;
+				}
+			}
+
+			if (!allTpks.HasValue || allTpks.Value.ValueKind != JsonValueKind.Array) {
+				return tpks;
+			}
+
+			foreach (JsonElement tpk in allTpks.Value.EnumerateArray()) {
+				if (tpk.ValueKind != JsonValueKind.Object) {
+					continue;
+				}
+
+				// Extract all relevant fields by enumerating
+				string? keyTypeStr = null;
+				string? redeemedKeyVal = null;
+				string? humanName = null;
+				string? machineName = null;
+				uint steamAppId = 0;
+				bool isExpired = false;
+				bool soldOut = false;
+				List<string> disallowedCountries = new();
+				List<string> exclusiveCountries = new();
+
+				foreach (JsonProperty prop in tpk.EnumerateObject()) {
+					switch (prop.Name) {
+						case "key_type" when prop.Value.ValueKind == JsonValueKind.String:
+							keyTypeStr = prop.Value.GetString();
+							break;
+						case "redeemed_key_val" when prop.Value.ValueKind == JsonValueKind.String:
+							redeemedKeyVal = prop.Value.GetString();
+							break;
+						case "human_name" when prop.Value.ValueKind == JsonValueKind.String:
+							humanName = prop.Value.GetString();
+							break;
+						case "machine_name" when prop.Value.ValueKind == JsonValueKind.String:
+							machineName = prop.Value.GetString();
+							break;
+						case "steam_app_id" when prop.Value.ValueKind == JsonValueKind.Number:
+							if (uint.TryParse(prop.Value.GetRawText(), out uint parsedAppId)) {
+								steamAppId = parsedAppId;
+							}
+
+							break;
+						case "is_expired":
+							isExpired = prop.Value.ValueKind == JsonValueKind.True;
+							break;
+						case "sold_out":
+							soldOut = prop.Value.ValueKind == JsonValueKind.True;
+							break;
+						case "disallowed_countries" when prop.Value.ValueKind == JsonValueKind.Array:
+							foreach (JsonElement country in prop.Value.EnumerateArray()) {
+								if (country.ValueKind == JsonValueKind.String) {
+									string? code = country.GetString();
+									if (!string.IsNullOrEmpty(code)) {
+										disallowedCountries.Add(code);
+									}
+								}
+							}
+
+							break;
+						case "exclusive_countries" when prop.Value.ValueKind == JsonValueKind.Array:
+							foreach (JsonElement country in prop.Value.EnumerateArray()) {
+								if (country.ValueKind == JsonValueKind.String) {
+									string? code = country.GetString();
+									if (!string.IsNullOrEmpty(code)) {
+										exclusiveCountries.Add(code);
+									}
+								}
+							}
+
+							break;
+					}
+				}
+
+				// Only process Steam keys
+				if (!string.Equals(keyTypeStr, "steam", StringComparison.OrdinalIgnoreCase)) {
+					continue;
+				}
+
+				tpks.Add(new HumbleTpkInfo {
+					GameKey = orderKey,
+					HumanName = humanName ?? "Unknown",
+					MachineName = machineName ?? "unknown",
+					SteamAppId = steamAppId,
+					RedeemedKeyVal = redeemedKeyVal,
+					IsExpired = isExpired,
+					SoldOut = soldOut,
+					DisallowedCountries = disallowedCountries,
+					ExclusiveCountries = exclusiveCountries
+				});
+			}
+		} catch (Exception ex) {
+			ASF.ArchiLogger.LogGenericException(ex, $"[{botName}] Failed to parse tpkd_dict for order {orderKey}");
+		}
+
+		return tpks;
 	}
 
 	private static HumbleBundleBotConfig? ParseBotConfig(string botName, IReadOnlyDictionary<string, JsonElement>? additionalConfigProperties) {

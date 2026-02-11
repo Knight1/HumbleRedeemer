@@ -17,6 +17,14 @@ internal sealed class HumbleBundleBotCache : SerializableFile {
 	[JsonPropertyName("LastLogin")]
 	internal DateTime? LastLogin { get; set; }
 
+	[JsonInclude]
+	[JsonPropertyName("CachedGameKeys")]
+	internal List<string> CachedGameKeys { get; set; } = new();
+
+	[JsonInclude]
+	[JsonPropertyName("CachedTpks")]
+	internal List<HumbleTpkInfo> CachedTpks { get; set; } = new();
+
 	private HumbleBundleBotCache(string filePath) : this() {
 		ArgumentException.ThrowIfNullOrEmpty(filePath);
 
