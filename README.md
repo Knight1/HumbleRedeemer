@@ -1,15 +1,4 @@
-# ASF-PluginTemplate
-
-[![GitHub sponsor](https://img.shields.io/badge/GitHub-sponsor-ea4aaa.svg?logo=github-sponsors)](https://github.com/sponsors/JustArchi)
-[![PayPal.me donate](https://img.shields.io/badge/PayPal.me-donate-00457c.svg?logo=paypal)](https://paypal.me/JustArchi)
-[![PayPal donate](https://img.shields.io/badge/PayPal-donate-00457c.svg?logo=paypal)](https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=HD2P2P3WGS5Y4)
-[![Revolut donate](https://img.shields.io/badge/Revolut-donate-0075eb.svg?logo=revolut)](https://pay.revolut.com/justarchi)
-[![Steam donate](https://img.shields.io/badge/Steam-donate-000000.svg?logo=steam)](https://steamcommunity.com/tradeoffer/new/?partner=46697991&token=0ix2Ruv_)
-
-[![BTC donate](https://img.shields.io/badge/BTC-donate-f7931a.svg?logo=bitcoin)](https://www.blockchain.com/explorer/addresses/btc/3HwcgZbtoF5vSxJkNUvThVSJipKi7r5EqU)
-[![ETH donate](https://img.shields.io/badge/ETH-donate-3c3c3d.svg?logo=ethereum)](https://www.blockchain.com/explorer/addresses/eth/0xA1F7Ba62C5a3A8b93Fe6656936192432F328a366)
-[![LTC donate](https://img.shields.io/badge/LTC-donate-a6a9aa.svg?logo=litecoin)](https://live.blockcypher.com/ltc/address/MJCeBEZUsNgDhRhqbLFfPiDcf7CSrdvmZ3)
-[![USDC donate](https://img.shields.io/badge/USDC-donate-2775ca.svg?logo=cashapp)](https://etherscan.io/address/0xCf42D9F53F974CBd7c304eF0243CAe8e029885A8)
+# HumbleRedeemer
 
 ---
 
@@ -19,23 +8,40 @@
 
 ## Description
 
-ASF-PluginTemplate is a template repository that you can use for creating custom **[plugins](https://github.com/JustArchiNET/ArchiSteamFarm/wiki/Plugins)** for **[ArchiSteamFarm](https://github.com/JustArchiNET/ArchiSteamFarm)**. This template has everything needed to kickstart the structure of your custom ASF plugin. Most importantly, from viewpoint of a project not related to ASF whatsoever while making use of its best practices.
+This plugin enables automatic login and session management for HumbleBundle.com within the ASF framework.
 
 ---
 
-## How to use this template
+## Installation
 
-Simply click the "Use this template" button in the top-right of the **[main repository page](https://github.com/JustArchiNET/ASF-PluginTemplate)** in order to get started.
+### 1. Build the Plugin
 
-For cloning your git repository, use `git clone --recursive` option in order to pull ASF reference along with your plugin, which you'll require during compilation. See **[git submodules](https://git-scm.com/book/en/v2/Git-Tools-Submodules)** for more info.
+```bash
+dotnet publish HumbleRedeemer -c Release -o ASF/plugins/
+```
 
-After using the template and cloning git repo, assuming you have everything required as specified in **[compilation](https://github.com/JustArchiNET/ArchiSteamFarm/wiki/Compilation)** page on our wiki, try to build your project with `dotnet build MyAwesomePlugin`, it should succeed without any issues, which means you're all set.
+### 2. Configure HumbleBundle Credentials
 
-In theory, you don't need to do anything special further, just edit **[`MyAwesomePlugin/MyAwesomePlugin.cs`](https://github.com/JustArchiNET/ASF-PluginTemplate/blob/main/MyAwesomePlugin/MyAwesomePlugin.cs)** file and get going with your plugin logic. However, there are some things we recommend on doing in addition to above steps, and some we highlight as a possibility in case you'd be interested in them. It's now up to you what you want to do next.
+Add HumbleBundle settings directly to your bot's configuration file in `config/<BotName>.json`:
+
+```json
+{
+  "HumbleBundleEnabled": true,
+  "HumbleBundleUsername": "your_humblebundle_email@example.com",
+  "HumbleBundlePassword": "your_humblebundle_password",
+  "HumbleBundleTwoFactorCode": ""
+}
+```
+
+**Configuration Properties:**
+- `HumbleBundleEnabled` - Set to `true` to enable HumbleBundle for this bot
+- `HumbleBundleUsername` - Your HumbleBundle account email
+- `HumbleBundlePassword` - Your HumbleBundle account password
+- `HumbleBundleTwoFactorCode` - Optional 2FA secret, otherwise you will be asked for the 6 digit code
 
 ---
 
-## What's included
+## Implementation Details
 
 - Sample `MyAwesomePlugin` ASF plugin project with `ArchiSteamFarm` reference in git subtree.
 - Project structure supporting `IGitHubPluginUpdates` ASF interface, allowing for convenient plugin updates.
@@ -60,13 +66,8 @@ Here we list steps that are **not mandatory**, but worthy to consider after usin
 - Fill **[`SECURITY.md`](https://github.com/JustArchiNET/ASF-PluginTemplate/blob/main/.github/SECURITY.md)** file, so your users can learn where they should report critical security issues in regards to your plugin.
 - If you want to use **[Renovate bot](https://github.com/renovatebot/renovate)** like we do, we recommend to modify the `:assignee()` block in our **[`renovate.json5`](https://github.com/JustArchiNET/ASF-PluginTemplate/blob/main/.github/renovate.json5#L5)** config file and putting your own GitHub username there. This will allow Renovate bot to assign failing PR to you so you can take a look at it. Everything else can stay as it is, unless you want to modify it of course.
 - Provide your own **[`CODE_OF_CONDUCT.md`](https://github.com/JustArchiNET/ASF-PluginTemplate/blob/main/.github/CODE_OF_CONDUCT.md#enforcement)** if you'd like to. If you're fine with ours, you can simply replace `TODO@example.com` e-mail with your own.
-- Provide your own **[`FUNDING.yml`](https://github.com/JustArchiNET/ASF-PluginTemplate/blob/main/.github/FUNDING.yml)** if you'd like to. By default the template comes with the funding available for the main ASF project, which you're free to keep, remove, or replace with your own.
 
 ---
-
-## Worth mentioning
-
-Here we list things that do not require your immediate attention, but we consider worthy to know.
 
 ### Compilation
 
