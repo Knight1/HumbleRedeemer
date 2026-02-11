@@ -529,3 +529,4 @@ $RECYCLE.BIN/
 *.lnk
 
 ASF/
+.vscode/
