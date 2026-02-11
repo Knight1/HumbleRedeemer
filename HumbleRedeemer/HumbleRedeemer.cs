@@ -106,7 +106,7 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 	private static readonly ConcurrentDictionary<Bot, bool> BotComparisonDone = new();
 	private static readonly ConcurrentDictionary<Bot, HumbleBundleBotCache> BotCaches = new();
 	private static readonly ConcurrentDictionary<Bot, System.Threading.Timer> BotRedeemTimers = new();
-	private static readonly ConcurrentDictionary<Bot, int> BotRedeemIntervals = new();
+	private static readonly ConcurrentDictionary<Bot, HumbleBundleBotConfig> BotConfigs = new();
 
 	public Task OnLoaded() {
 		ASF.ArchiLogger.LogGenericInfo($"{Name} plugin loaded!");
@@ -230,8 +230,8 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 			}
 		}
 
-		// Store the retry interval and cache for this bot
-		BotRedeemIntervals[bot] = config.RedeemRetryIntervalMinutes;
+		// Store the config and cache for this bot
+		BotConfigs[bot] = config;
 		BotCaches[bot] = botCache;
 
 		// Store the handler for later use
@@ -256,7 +256,7 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 		BotHumbleTpks.TryRemove(bot, out _);
 		BotChoiceOrders.TryRemove(bot, out _);
 		BotComparisonDone.TryRemove(bot, out _);
-		BotRedeemIntervals.TryRemove(bot, out _);
+		BotConfigs.TryRemove(bot, out _);
 		BotCaches.TryRemove(bot, out _);
 	}
 
@@ -388,6 +388,8 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 		}
 
 		BotCountryCodes.TryGetValue(bot, out string? countryCode);
+		BotConfigs.TryGetValue(bot, out HumbleBundleBotConfig? config);
+		bool ignoreStoreLocation = config?.IgnoreStoreLocation ?? false;
 
 		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Starting Humble Bundle vs Steam library comparison...");
 		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Bot country: {countryCode ?? "unknown"} | Humble TPKs: {humbleTpks.Count} | Owned packages: {bot.OwnedPackages.Count}");
@@ -436,8 +438,8 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 				continue;
 			}
 
-			// Check country restrictions
-			if (!string.IsNullOrEmpty(countryCode)) {
+			// Check country restrictions (unless IgnoreStoreLocation is enabled)
+			if (!ignoreStoreLocation && !string.IsNullOrEmpty(countryCode)) {
 				// Check disallowed_countries - if bot's country is in the list, key cannot be redeemed
 				if (tpk.DisallowedCountries.Count > 0) {
 					bool isDisallowed = false;
@@ -511,17 +513,17 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] No App ID (cannot verify): {noAppId}");
 		// Automatically redeem unrevealed keys that are not owned
 		if (availableToRedeem > 0) {
-			await RedeemAvailableKeys(bot, humbleTpks, ownedAppIds, countryCode).ConfigureAwait(false);
+			await RedeemAvailableKeys(bot, humbleTpks, ownedAppIds, countryCode, ignoreStoreLocation).ConfigureAwait(false);
 		}
 
 		// Process Humble Choice orders
-		await ProcessChoiceOrders(bot, humbleTpks, ownedAppIds, countryCode).ConfigureAwait(false);
+		await ProcessChoiceOrders(bot, humbleTpks, ownedAppIds, countryCode, ignoreStoreLocation).ConfigureAwait(false);
 
 		// Start periodic retry timer for keys that couldn't be redeemed (sold out, etc.)
 		int remainingUnrevealed = humbleTpks.Count(t =>
 			string.IsNullOrEmpty(t.RedeemedKeyVal) && !t.IsExpired && !t.SoldOut && !t.IsGift
 			&& t.SteamAppId != 0 && !ownedAppIds.Contains(t.SteamAppId)
-			&& IsCountryAllowed(t, countryCode));
+			&& IsCountryAllowed(t, countryCode, ignoreStoreLocation));
 
 		if (remainingUnrevealed > 0) {
 			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] {remainingUnrevealed} keys still unrevealed, starting retry timer");
@@ -529,8 +531,8 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 		}
 	}
 
-	private static bool IsCountryAllowed(HumbleTpkInfo tpk, string? countryCode) {
-		if (string.IsNullOrEmpty(countryCode)) {
+	private static bool IsCountryAllowed(HumbleTpkInfo tpk, string? countryCode, bool ignoreStoreLocation = false) {
+		if (ignoreStoreLocation || string.IsNullOrEmpty(countryCode)) {
 			return true;
 		}
 
@@ -560,29 +562,38 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 		return true;
 	}
 
-	private static async Task RedeemAvailableKeys(Bot bot, List<HumbleTpkInfo> humbleTpks, HashSet<uint> ownedAppIds, string? countryCode) {
+	private static async Task RedeemAvailableKeys(Bot bot, List<HumbleTpkInfo> humbleTpks, HashSet<uint> ownedAppIds, string? countryCode, bool ignoreStoreLocation = false) {
 		if (!BotHandlers.TryGetValue(bot, out HumbleBundleWebHandler? webHandler)) {
 			ASF.ArchiLogger.LogGenericWarning($"[{bot.BotName}] No web handler available for redeeming keys");
 			return;
 		}
 
-		// Collect eligible TPKs: unrevealed, not owned, not expired, not sold out, not a gift, not country blocked
-		List<HumbleTpkInfo> toRedeem = new();
+		BotConfigs.TryGetValue(bot, out HumbleBundleBotConfig? config);
+		bool useGiftLinkForOwned = config?.UseGiftLinkForOwned ?? false;
+
+		// Collect eligible TPKs: unrevealed, not expired, not sold out, not already a gift, not country blocked
+		// If UseGiftLinkForOwned is true, also include games already owned (to redeem as gift links)
+		List<(HumbleTpkInfo tpk, bool asGift)> toRedeem = new();
 
 		foreach (HumbleTpkInfo tpk in humbleTpks) {
 			if (!string.IsNullOrEmpty(tpk.RedeemedKeyVal) || tpk.IsExpired || tpk.SoldOut || tpk.IsGift || tpk.SteamAppId == 0) {
 				continue;
 			}
 
-			if (ownedAppIds.Contains(tpk.SteamAppId)) {
+			if (!IsCountryAllowed(tpk, countryCode, ignoreStoreLocation)) {
 				continue;
 			}
 
-			if (!IsCountryAllowed(tpk, countryCode)) {
+			bool isOwned = ownedAppIds.Contains(tpk.SteamAppId);
+
+			// If already owned and not using gift links for owned games, skip
+			if (isOwned && !useGiftLinkForOwned) {
 				continue;
 			}
 
-			toRedeem.Add(tpk);
+			// Redeem as gift if already owned and UseGiftLinkForOwned is enabled
+			bool redeemAsGift = isOwned && useGiftLinkForOwned;
+			toRedeem.Add((tpk, redeemAsGift));
 		}
 
 		if (toRedeem.Count == 0) {
@@ -592,14 +603,20 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Attempting to redeem {toRedeem.Count} unrevealed keys...");
 
 		int redeemed = 0;
+		int redeemedAsGift = 0;
 		int failed = 0;
 		bool cacheUpdated = false;
 
-		foreach (HumbleTpkInfo tpk in toRedeem) {
-			string? key = await webHandler.RedeemKeyAsync(tpk.MachineName, tpk.GameKey, tpk.KeyIndex).ConfigureAwait(false);
+		foreach ((HumbleTpkInfo tpk, bool asGift) in toRedeem) {
+			string? key = await webHandler.RedeemKeyAsync(tpk.MachineName, tpk.GameKey, tpk.KeyIndex, asGift).ConfigureAwait(false);
 
 			if (!string.IsNullOrEmpty(key)) {
-				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] REDEEMED: '{tpk.HumanName}' (AppID: {tpk.SteamAppId}) => {key}");
+				if (asGift) {
+					ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] REDEEMED AS GIFT: '{tpk.HumanName}' (AppID: {tpk.SteamAppId}) => {key}");
+					redeemedAsGift++;
+				} else {
+					ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] REDEEMED: '{tpk.HumanName}' (AppID: {tpk.SteamAppId}) => {key}");
+				}
 				tpk.RedeemedKeyVal = key;
 				redeemed++;
 				cacheUpdated = true;
@@ -612,7 +629,11 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 			await Task.Delay(500).ConfigureAwait(false);
 		}
 
-		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Redeem results: {redeemed} succeeded, {failed} failed");
+		if (redeemedAsGift > 0) {
+			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Redeem results: {redeemed - redeemedAsGift} succeeded, {redeemedAsGift} redeemed as gift links, {failed} failed");
+		} else {
+			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Redeem results: {redeemed} succeeded, {failed} failed");
+		}
 
 		// Update cache with redeemed keys
 		if (cacheUpdated && BotCaches.TryGetValue(bot, out HumbleBundleBotCache? botCache)) {
@@ -622,7 +643,7 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 		}
 	}
 
-	private static async Task ProcessChoiceOrders(Bot bot, List<HumbleTpkInfo> humbleTpks, HashSet<uint> ownedAppIds, string? countryCode) {
+	private static async Task ProcessChoiceOrders(Bot bot, List<HumbleTpkInfo> humbleTpks, HashSet<uint> ownedAppIds, string? countryCode, bool ignoreStoreLocation = false) {
 		if (!BotChoiceOrders.TryGetValue(bot, out List<ChoiceOrderInfo>? choiceOrders) || choiceOrders.Count == 0) {
 			ASF.ArchiLogger.LogGenericDebug($"[{bot.BotName}] No Choice orders to process");
 			return;
@@ -715,12 +736,18 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 	}
 
 	private static void StartRedeemRetryTimer(Bot bot) {
+		// Check if auto-retry is enabled
+		if (!BotConfigs.TryGetValue(bot, out HumbleBundleBotConfig? config) || !config.AutoRetry) {
+			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Auto-retry is disabled, skipping timer start");
+			return;
+		}
+
 		// Dispose existing timer if any
 		if (BotRedeemTimers.TryRemove(bot, out System.Threading.Timer? existingTimer)) {
 			existingTimer.Dispose();
 		}
 
-		int intervalMinutes = BotRedeemIntervals.GetValueOrDefault(bot, 60);
+		int intervalMinutes = config.RedeemRetryIntervalMinutes;
 		TimeSpan interval = TimeSpan.FromMinutes(intervalMinutes);
 
 		System.Threading.Timer timer = new(
@@ -746,6 +773,8 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 		}
 
 		BotCountryCodes.TryGetValue(bot, out string? countryCode);
+		BotConfigs.TryGetValue(bot, out HumbleBundleBotConfig? config);
+		bool ignoreStoreLocation = config?.IgnoreStoreLocation ?? false;
 
 		// Re-fetch order keys to check for newly available keys
 		List<string>? orderKeys = await webHandler.GetOrderKeysAsync().ConfigureAwait(false);
@@ -805,16 +834,16 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 		}
 
 		// Attempt to redeem available keys
-		await RedeemAvailableKeys(bot, humbleTpks, ownedAppIds, countryCode).ConfigureAwait(false);
+		await RedeemAvailableKeys(bot, humbleTpks, ownedAppIds, countryCode, ignoreStoreLocation).ConfigureAwait(false);
 
 		// Process Choice orders (if any)
-		await ProcessChoiceOrders(bot, humbleTpks, ownedAppIds, countryCode).ConfigureAwait(false);
+		await ProcessChoiceOrders(bot, humbleTpks, ownedAppIds, countryCode, ignoreStoreLocation).ConfigureAwait(false);
 
 		// Check if there are still unrevealed keys remaining
 		int remainingCount = humbleTpks.Count(t =>
 			string.IsNullOrEmpty(t.RedeemedKeyVal) && !t.IsExpired && !t.SoldOut && !t.IsGift
 			&& t.SteamAppId != 0 && !ownedAppIds.Contains(t.SteamAppId)
-			&& IsCountryAllowed(t, countryCode));
+			&& IsCountryAllowed(t, countryCode, ignoreStoreLocation));
 
 		if (remainingCount == 0) {
 			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] All keys redeemed, stopping retry timer");
@@ -1058,6 +1087,30 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 						if (int.TryParse(configValue.GetRawText(), out int parsedInterval) && parsedInterval > 0) {
 							config.RedeemRetryIntervalMinutes = parsedInterval;
 						}
+
+						break;
+					case "HumbleBundleIgnoreStoreLocation" when configValue.ValueKind == JsonValueKind.True:
+						config.IgnoreStoreLocation = true;
+
+						break;
+					case "HumbleBundleIgnoreStoreLocation" when configValue.ValueKind == JsonValueKind.False:
+						config.IgnoreStoreLocation = false;
+
+						break;
+					case "HumbleBundleAutoRetry" when configValue.ValueKind == JsonValueKind.True:
+						config.AutoRetry = true;
+
+						break;
+					case "HumbleBundleAutoRetry" when configValue.ValueKind == JsonValueKind.False:
+						config.AutoRetry = false;
+
+						break;
+					case "HumbleBundleUseGiftLinkForOwned" when configValue.ValueKind == JsonValueKind.True:
+						config.UseGiftLinkForOwned = true;
+
+						break;
+					case "HumbleBundleUseGiftLinkForOwned" when configValue.ValueKind == JsonValueKind.False:
+						config.UseGiftLinkForOwned = false;
 
 						break;
 				}
