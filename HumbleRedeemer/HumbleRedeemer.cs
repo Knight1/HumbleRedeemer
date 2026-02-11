@@ -90,7 +90,104 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IGitHubPluginUpdates {
 		List<string>? orderKeys = await webHandler.GetOrderKeysAsync().ConfigureAwait(false);
 
 		if (orderKeys != null && orderKeys.Count > 0) {
-			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Successfully connected to HumbleBundle. Found {orderKeys.Count} orders.");
+			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Successfully authenticated to HumbleBundle. Found {orderKeys.Count} orders.");
+
+			// Fetch all orders individually (reliable, but slower than bulk API)
+			Dictionary<string, JsonElement>? allOrders = await webHandler.GetAllOrdersIndividuallyAsync(orderKeys).ConfigureAwait(false);
+
+			if (allOrders != null && allOrders.Count > 0) {
+				// Extract Steam keys from tpkd_dict.all_tpks
+				List<string> steamKeys = new();
+				int ordersWithKeys = 0;
+
+				foreach ((string orderKey, JsonElement orderData) in allOrders) {
+					try {
+						if (orderData.ValueKind != JsonValueKind.Object) {
+							continue;
+						}
+
+						// Get tpkd_dict object by enumerating properties
+						// (cannot use TryGetProperty - not available in ASF's runtime)
+						JsonElement? tpkdDict = null;
+
+						foreach (JsonProperty prop in orderData.EnumerateObject()) {
+							if (prop.Name.Equals("tpkd_dict", StringComparison.OrdinalIgnoreCase)) {
+								tpkdDict = prop.Value;
+								break;
+							}
+						}
+
+						if (!tpkdDict.HasValue || tpkdDict.Value.ValueKind != JsonValueKind.Object) {
+							continue;
+						}
+
+						// Get all_tpks array from tpkd_dict
+						JsonElement? allTpks = null;
+
+						foreach (JsonProperty prop in tpkdDict.Value.EnumerateObject()) {
+							if (prop.Name.Equals("all_tpks", StringComparison.OrdinalIgnoreCase)) {
+								allTpks = prop.Value;
+								break;
+							}
+						}
+
+						if (!allTpks.HasValue || allTpks.Value.ValueKind != JsonValueKind.Array) {
+							continue;
+						}
+
+						bool orderHasKeys = false;
+
+						foreach (JsonElement tpk in allTpks.Value.EnumerateArray()) {
+							if (tpk.ValueKind != JsonValueKind.Object) {
+								continue;
+							}
+
+							// Extract key_type, redeemed_key_val, and human_name by enumerating
+							string? keyTypeStr = null;
+							string? redeemedKeyVal = null;
+							string? humanName = null;
+
+							foreach (JsonProperty prop in tpk.EnumerateObject()) {
+								switch (prop.Name) {
+									case "key_type" when prop.Value.ValueKind == JsonValueKind.String:
+										keyTypeStr = prop.Value.GetString();
+										break;
+									case "redeemed_key_val" when prop.Value.ValueKind == JsonValueKind.String:
+										redeemedKeyVal = prop.Value.GetString();
+										break;
+									case "human_name" when prop.Value.ValueKind == JsonValueKind.String:
+										humanName = prop.Value.GetString();
+										break;
+								}
+							}
+
+							// Only process Steam keys
+							if (!string.Equals(keyTypeStr, "steam", StringComparison.OrdinalIgnoreCase)) {
+								continue;
+							}
+
+							if (string.IsNullOrEmpty(redeemedKeyVal)) {
+								continue;
+							}
+
+							steamKeys.Add(redeemedKeyVal);
+							orderHasKeys = true;
+
+							ASF.ArchiLogger.LogGenericDebug($"[{bot.BotName}] Found Steam key for '{humanName ?? "Unknown"}': {redeemedKeyVal}");
+						}
+
+						if (orderHasKeys) {
+							ordersWithKeys++;
+						}
+					} catch (Exception ex) {
+						ASF.ArchiLogger.LogGenericException(ex, $"[{bot.BotName}] Failed to parse tpkd_dict for order {orderKey}");
+					}
+				}
+
+				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Found {steamKeys.Count} Steam keys across {ordersWithKeys} orders (out of {allOrders.Count} fetched)");
+
+				// TODO: Redeem Steam keys via ASF bot
+			}
 		}
 
 		// Store the handler for later use
