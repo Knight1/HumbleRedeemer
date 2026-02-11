@@ -20,6 +20,26 @@ using SteamKit2.Internal;
 namespace HumbleRedeemer;
 
 /// <summary>
+/// Holds information about a Humble Choice order.
+/// </summary>
+internal sealed class ChoiceOrderInfo {
+	[JsonInclude]
+	[JsonPropertyName("GameKey")]
+	internal string GameKey { get; set; } = "";
+
+	[JsonInclude]
+	[JsonPropertyName("ChoiceUrl")]
+	internal string ChoiceUrl { get; set; } = "";
+
+	[JsonInclude]
+	[JsonPropertyName("HumanName")]
+	internal string HumanName { get; set; } = "";
+
+	[JsonConstructor]
+	internal ChoiceOrderInfo() { }
+}
+
+/// <summary>
 /// Holds parsed TPK (third-party key) data from a Humble Bundle order.
 /// </summary>
 internal sealed class HumbleTpkInfo {
@@ -82,6 +102,7 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 	private static readonly ConcurrentDictionary<Bot, HumbleBundleWebHandler> BotHandlers = new();
 	private static readonly ConcurrentDictionary<Bot, string> BotCountryCodes = new();
 	private static readonly ConcurrentDictionary<Bot, List<HumbleTpkInfo>> BotHumbleTpks = new();
+	private static readonly ConcurrentDictionary<Bot, List<ChoiceOrderInfo>> BotChoiceOrders = new();
 	private static readonly ConcurrentDictionary<Bot, bool> BotComparisonDone = new();
 	private static readonly ConcurrentDictionary<Bot, HumbleBundleBotCache> BotCaches = new();
 	private static readonly ConcurrentDictionary<Bot, System.Threading.Timer> BotRedeemTimers = new();
@@ -158,6 +179,7 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 			// Load cached TPK data and determine which orders are new
 			HashSet<string> cachedGameKeys = new(botCache.CachedGameKeys, StringComparer.OrdinalIgnoreCase);
 			List<HumbleTpkInfo> steamTpks = new(botCache.CachedTpks);
+			List<ChoiceOrderInfo> choiceOrders = new();
 			List<string> newGameKeys = orderKeys.Where(key => !cachedGameKeys.Contains(key)).ToList();
 
 			if (steamTpks.Count > 0) {
@@ -177,9 +199,20 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 						List<HumbleTpkInfo> orderTpks = ExtractSteamTpksFromOrder(bot.BotName, orderKey, orderData);
 						steamTpks.AddRange(orderTpks);
 						newTpkCount += orderTpks.Count;
+
+						// Check if this is a Choice order
+						ChoiceOrderInfo? choiceInfo = ExtractChoiceOrderInfo(orderKey, orderData);
+						if (choiceInfo != null) {
+							choiceOrders.Add(choiceInfo);
+						}
 					}
 
 					ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Found {newTpkCount} new Steam TPKs from {newOrders.Count} new orders");
+
+					if (choiceOrders.Count > 0) {
+						ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Found {choiceOrders.Count} Humble Choice orders");
+						BotChoiceOrders[bot] = choiceOrders;
+					}
 
 					// Update cache with all known gamekeys and TPKs
 					botCache.CachedGameKeys = new List<string>(orderKeys);
@@ -221,6 +254,7 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 
 		BotCountryCodes.TryRemove(bot, out _);
 		BotHumbleTpks.TryRemove(bot, out _);
+		BotChoiceOrders.TryRemove(bot, out _);
 		BotComparisonDone.TryRemove(bot, out _);
 		BotRedeemIntervals.TryRemove(bot, out _);
 		BotCaches.TryRemove(bot, out _);
@@ -480,6 +514,9 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 			await RedeemAvailableKeys(bot, humbleTpks, ownedAppIds, countryCode).ConfigureAwait(false);
 		}
 
+		// Process Humble Choice orders
+		await ProcessChoiceOrders(bot, humbleTpks, ownedAppIds, countryCode).ConfigureAwait(false);
+
 		// Start periodic retry timer for keys that couldn't be redeemed (sold out, etc.)
 		int remainingUnrevealed = humbleTpks.Count(t =>
 			string.IsNullOrEmpty(t.RedeemedKeyVal) && !t.IsExpired && !t.SoldOut && !t.IsGift
@@ -585,6 +622,98 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 		}
 	}
 
+	private static async Task ProcessChoiceOrders(Bot bot, List<HumbleTpkInfo> humbleTpks, HashSet<uint> ownedAppIds, string? countryCode) {
+		if (!BotChoiceOrders.TryGetValue(bot, out List<ChoiceOrderInfo>? choiceOrders) || choiceOrders.Count == 0) {
+			ASF.ArchiLogger.LogGenericDebug($"[{bot.BotName}] No Choice orders to process");
+			return;
+		}
+
+		if (!BotHandlers.TryGetValue(bot, out HumbleBundleWebHandler? webHandler)) {
+			ASF.ArchiLogger.LogGenericWarning($"[{bot.BotName}] No web handler available for processing Choice orders");
+			return;
+		}
+
+		if (!BotCaches.TryGetValue(bot, out HumbleBundleBotCache? botCache)) {
+			ASF.ArchiLogger.LogGenericWarning($"[{bot.BotName}] No cache available for saving Choice keys");
+			return;
+		}
+
+		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] === Processing {choiceOrders.Count} Humble Choice Orders ===");
+
+		int totalRedeemed = 0;
+		int totalFailed = 0;
+		int totalSkipped = 0;
+
+		foreach (ChoiceOrderInfo choiceOrder in choiceOrders) {
+			try {
+				List<ChoiceRedemptionResult> results = await webHandler.ProcessChoiceOrderAsync(
+					choiceOrder.GameKey,
+					choiceOrder.ChoiceUrl,
+					choiceOrder.HumanName
+				).ConfigureAwait(false);
+
+				foreach (ChoiceRedemptionResult result in results) {
+					// Convert to HumbleTpkInfo and add to cache
+					if (!string.IsNullOrEmpty(result.Key)) {
+						// Check if we already own this game
+						bool alreadyOwned = result.KeyType.Equals("steam", StringComparison.OrdinalIgnoreCase) &&
+						                    ownedAppIds.Contains(0); // We don't have AppId from choice result
+
+						HumbleTpkInfo tpk = new() {
+							GameKey = choiceOrder.GameKey,
+							HumanName = result.GameName,
+							MachineName = result.MachineName,
+							SteamAppId = 0, // Choice page doesn't always provide AppId reliably
+							RedeemedKeyVal = result.Key,
+							IsExpired = false,
+							SoldOut = false,
+							KeyIndex = 0,
+							IsGift = false,
+							DisallowedCountries = [],
+							ExclusiveCountries = []
+						};
+
+						// Check if this TPK already exists (by machine name and game key)
+						bool alreadyExists = humbleTpks.Any(t =>
+							t.MachineName.Equals(tpk.MachineName, StringComparison.OrdinalIgnoreCase) &&
+							t.GameKey.Equals(tpk.GameKey, StringComparison.OrdinalIgnoreCase));
+
+						if (!alreadyExists) {
+							humbleTpks.Add(tpk);
+						}
+
+						ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] CHOICE REDEEMED: '{result.GameName}' from {result.ChoiceTitle} => {result.Key}");
+						totalRedeemed++;
+					} else if (!string.IsNullOrEmpty(result.Error)) {
+						if (result.Error == "Expired" || result.Error == "Sold out") {
+							ASF.ArchiLogger.LogGenericDebug($"[{bot.BotName}] CHOICE SKIPPED: '{result.GameName}' from {result.ChoiceTitle} ({result.Error})");
+							totalSkipped++;
+						} else {
+							ASF.ArchiLogger.LogGenericWarning($"[{bot.BotName}] CHOICE FAILED: '{result.GameName}' from {result.ChoiceTitle} - {result.Error}");
+							totalFailed++;
+						}
+					}
+				}
+
+				// Small delay between choice orders
+				await Task.Delay(1000).ConfigureAwait(false);
+			} catch (Exception ex) {
+				ASF.ArchiLogger.LogGenericException(ex, $"[{bot.BotName}] Failed to process Choice order: {choiceOrder.HumanName}");
+				totalFailed++;
+			}
+		}
+
+		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] === Choice Processing Complete ===");
+		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Redeemed: {totalRedeemed}, Failed: {totalFailed}, Skipped: {totalSkipped}");
+
+		// Update cache with redeemed Choice keys
+		if (totalRedeemed > 0) {
+			botCache.CachedTpks = humbleTpks;
+			await botCache.SaveAsync().ConfigureAwait(false);
+			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Updated cache with {totalRedeemed} newly redeemed Choice keys");
+		}
+	}
+
 	private static void StartRedeemRetryTimer(Bot bot) {
 		// Dispose existing timer if any
 		if (BotRedeemTimers.TryRemove(bot, out System.Threading.Timer? existingTimer)) {
@@ -636,13 +765,29 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 			Dictionary<string, JsonElement>? newOrders = await webHandler.GetAllOrdersIndividuallyAsync(newGameKeys).ConfigureAwait(false);
 
 			if (newOrders != null && newOrders.Count > 0) {
+				List<ChoiceOrderInfo> choiceOrders = BotChoiceOrders.GetValueOrDefault(bot) ?? new List<ChoiceOrderInfo>();
+
 				foreach ((string orderKey, JsonElement orderData) in newOrders) {
 					List<HumbleTpkInfo> orderTpks = ExtractSteamTpksFromOrder(bot.BotName, orderKey, orderData);
 					humbleTpks.AddRange(orderTpks);
+
+					// Check if this is a new Choice order
+					ChoiceOrderInfo? choiceInfo = ExtractChoiceOrderInfo(orderKey, orderData);
+					if (choiceInfo != null) {
+						bool alreadyTracked = choiceOrders.Any(c => c.GameKey.Equals(choiceInfo.GameKey, StringComparison.OrdinalIgnoreCase));
+						if (!alreadyTracked) {
+							choiceOrders.Add(choiceInfo);
+						}
+					}
 				}
 
 				BotHumbleTpks[bot] = humbleTpks;
+				BotChoiceOrders[bot] = choiceOrders;
 				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Updated TPK list, now {humbleTpks.Count} total");
+
+				if (choiceOrders.Count > 0) {
+					ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Tracking {choiceOrders.Count} Choice orders");
+				}
 			}
 		}
 
@@ -661,6 +806,9 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 
 		// Attempt to redeem available keys
 		await RedeemAvailableKeys(bot, humbleTpks, ownedAppIds, countryCode).ConfigureAwait(false);
+
+		// Process Choice orders (if any)
+		await ProcessChoiceOrders(bot, humbleTpks, ownedAppIds, countryCode).ConfigureAwait(false);
 
 		// Check if there are still unrevealed keys remaining
 		int remainingCount = humbleTpks.Count(t =>
@@ -818,6 +966,62 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 		}
 
 		return tpks;
+	}
+
+	private static ChoiceOrderInfo? ExtractChoiceOrderInfo(string orderKey, JsonElement orderData) {
+		try {
+			if (orderData.ValueKind != JsonValueKind.Object) {
+				return null;
+			}
+
+			// Get product object
+			JsonElement? product = null;
+
+			foreach (JsonProperty prop in orderData.EnumerateObject()) {
+				if (prop.Name.Equals("product", StringComparison.OrdinalIgnoreCase)) {
+					product = prop.Value;
+					break;
+				}
+			}
+
+			if (!product.HasValue || product.Value.ValueKind != JsonValueKind.Object) {
+				return null;
+			}
+
+			// Check if this is a subscription content order with a choice_url
+			string? category = null;
+			string? choiceUrl = null;
+			string? humanName = null;
+
+			foreach (JsonProperty prop in product.Value.EnumerateObject()) {
+				switch (prop.Name) {
+					case "category" when prop.Value.ValueKind == JsonValueKind.String:
+						category = prop.Value.GetString();
+						break;
+					case "choice_url" when prop.Value.ValueKind == JsonValueKind.String:
+						choiceUrl = prop.Value.GetString();
+						break;
+					case "human_name" when prop.Value.ValueKind == JsonValueKind.String:
+						humanName = prop.Value.GetString();
+						break;
+				}
+			}
+
+			// Only return info if this is a subscription content order with a choice URL
+			if (string.Equals(category, "subscriptioncontent", StringComparison.OrdinalIgnoreCase) &&
+			    !string.IsNullOrEmpty(choiceUrl)) {
+				return new ChoiceOrderInfo {
+					GameKey = orderKey,
+					ChoiceUrl = choiceUrl,
+					HumanName = humanName ?? "Unknown Choice"
+				};
+			}
+
+			return null;
+		} catch (Exception ex) {
+			ASF.ArchiLogger.LogGenericException(ex, $"Failed to extract choice order info for order {orderKey}");
+			return null;
+		}
 	}
 
 	private static HumbleBundleBotConfig? ParseBotConfig(string botName, IReadOnlyDictionary<string, JsonElement>? additionalConfigProperties) {
