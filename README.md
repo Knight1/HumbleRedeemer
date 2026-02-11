@@ -29,7 +29,11 @@ Add HumbleBundle settings directly to your bot's configuration file in `config/<
   "HumbleBundleEnabled": true,
   "HumbleBundleUsername": "your_humblebundle_email@example.com",
   "HumbleBundlePassword": "your_humblebundle_password",
-  "HumbleBundleTwoFactorCode": ""
+  "HumbleBundleTwoFactorCode": "",
+  "HumbleBundleRedeemRetryIntervalMinutes": 60,
+  "HumbleBundleIgnoreStoreLocation": false,
+  "HumbleBundleAutoRetry": true,
+  "HumbleBundleUseGiftLinkForOwned": false
 }
 ```
 
@@ -38,6 +42,10 @@ Add HumbleBundle settings directly to your bot's configuration file in `config/<
 - `HumbleBundleUsername` - Your HumbleBundle account email
 - `HumbleBundlePassword` - Your HumbleBundle account password
 - `HumbleBundleTwoFactorCode` - Optional 2FA secret, otherwise you will be asked for the 6 digit code
+- `HumbleBundleRedeemRetryIntervalMinutes` - Interval in minutes for retrying failed redemptions (default: 60)
+- `HumbleBundleIgnoreStoreLocation` - If `true`, ignore region restrictions when redeeming keys (default: false)
+- `HumbleBundleAutoRetry` - If `true`, automatically retry redeeming failed keys periodically (default: true)
+- `HumbleBundleUseGiftLinkForOwned` - If `true`, redeem games already in your library as gift links instead of regular keys (default: false)
 
 ---
 
