@@ -52,6 +52,14 @@ internal sealed class HumbleTpkInfo {
 	internal bool SoldOut { get; set; }
 
 	[JsonInclude]
+	[JsonPropertyName("KeyIndex")]
+	internal int KeyIndex { get; set; }
+
+	[JsonInclude]
+	[JsonPropertyName("IsGift")]
+	internal bool IsGift { get; set; }
+
+	[JsonInclude]
 	[JsonPropertyName("DisallowedCountries")]
 	internal List<string> DisallowedCountries { get; set; } = [];
 
@@ -75,6 +83,9 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 	private static readonly ConcurrentDictionary<Bot, string> BotCountryCodes = new();
 	private static readonly ConcurrentDictionary<Bot, List<HumbleTpkInfo>> BotHumbleTpks = new();
 	private static readonly ConcurrentDictionary<Bot, bool> BotComparisonDone = new();
+	private static readonly ConcurrentDictionary<Bot, HumbleBundleBotCache> BotCaches = new();
+	private static readonly ConcurrentDictionary<Bot, System.Threading.Timer> BotRedeemTimers = new();
+	private static readonly ConcurrentDictionary<Bot, int> BotRedeemIntervals = new();
 
 	public Task OnLoaded() {
 		ASF.ArchiLogger.LogGenericInfo($"{Name} plugin loaded!");
@@ -186,11 +197,15 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 			}
 		}
 
+		// Store the retry interval and cache for this bot
+		BotRedeemIntervals[bot] = config.RedeemRetryIntervalMinutes;
+		BotCaches[bot] = botCache;
+
 		// Store the handler for later use
 		BotHandlers.TryAdd(bot, webHandler);
 	}
 
-	public Task OnBotDestroy(Bot bot) {
+	public async Task OnBotDestroy(Bot bot) {
 		ArgumentNullException.ThrowIfNull(bot);
 
 		// Cleanup bot handler and per-bot data
@@ -199,11 +214,16 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] HumbleBundle handler disposed");
 		}
 
+		if (BotRedeemTimers.TryRemove(bot, out System.Threading.Timer? timer)) {
+			await timer.DisposeAsync().ConfigureAwait(false);
+			ASF.ArchiLogger.LogGenericDebug($"[{bot.BotName}] Redeem retry timer disposed");
+		}
+
 		BotCountryCodes.TryRemove(bot, out _);
 		BotHumbleTpks.TryRemove(bot, out _);
 		BotComparisonDone.TryRemove(bot, out _);
-
-		return Task.CompletedTask;
+		BotRedeemIntervals.TryRemove(bot, out _);
+		BotCaches.TryRemove(bot, out _);
 	}
 
 	public Task OnBotSteamCallbacksInit(Bot bot, CallbackManager callbackManager) {
@@ -455,9 +475,208 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Expired: {expired}");
 		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Sold out: {soldOut}");
 		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] No App ID (cannot verify): {noAppId}");
-		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] === Keys will NOT be redeemed automatically ===");
+		// Automatically redeem unrevealed keys that are not owned
+		if (availableToRedeem > 0) {
+			await RedeemAvailableKeys(bot, humbleTpks, ownedAppIds, countryCode).ConfigureAwait(false);
+		}
 
-		await Task.CompletedTask.ConfigureAwait(false);
+		// Start periodic retry timer for keys that couldn't be redeemed (sold out, etc.)
+		int remainingUnrevealed = humbleTpks.Count(t =>
+			string.IsNullOrEmpty(t.RedeemedKeyVal) && !t.IsExpired && !t.SoldOut && !t.IsGift
+			&& t.SteamAppId != 0 && !ownedAppIds.Contains(t.SteamAppId)
+			&& IsCountryAllowed(t, countryCode));
+
+		if (remainingUnrevealed > 0) {
+			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] {remainingUnrevealed} keys still unrevealed, starting retry timer");
+			StartRedeemRetryTimer(bot);
+		}
+	}
+
+	private static bool IsCountryAllowed(HumbleTpkInfo tpk, string? countryCode) {
+		if (string.IsNullOrEmpty(countryCode)) {
+			return true;
+		}
+
+		if (tpk.DisallowedCountries.Count > 0) {
+			foreach (string disallowed in tpk.DisallowedCountries) {
+				if (string.Equals(disallowed, countryCode, StringComparison.OrdinalIgnoreCase)) {
+					return false;
+				}
+			}
+		}
+
+		if (tpk.ExclusiveCountries.Count > 0) {
+			bool found = false;
+
+			foreach (string allowed in tpk.ExclusiveCountries) {
+				if (string.Equals(allowed, countryCode, StringComparison.OrdinalIgnoreCase)) {
+					found = true;
+					break;
+				}
+			}
+
+			if (!found) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	private static async Task RedeemAvailableKeys(Bot bot, List<HumbleTpkInfo> humbleTpks, HashSet<uint> ownedAppIds, string? countryCode) {
+		if (!BotHandlers.TryGetValue(bot, out HumbleBundleWebHandler? webHandler)) {
+			ASF.ArchiLogger.LogGenericWarning($"[{bot.BotName}] No web handler available for redeeming keys");
+			return;
+		}
+
+		// Collect eligible TPKs: unrevealed, not owned, not expired, not sold out, not a gift, not country blocked
+		List<HumbleTpkInfo> toRedeem = new();
+
+		foreach (HumbleTpkInfo tpk in humbleTpks) {
+			if (!string.IsNullOrEmpty(tpk.RedeemedKeyVal) || tpk.IsExpired || tpk.SoldOut || tpk.IsGift || tpk.SteamAppId == 0) {
+				continue;
+			}
+
+			if (ownedAppIds.Contains(tpk.SteamAppId)) {
+				continue;
+			}
+
+			if (!IsCountryAllowed(tpk, countryCode)) {
+				continue;
+			}
+
+			toRedeem.Add(tpk);
+		}
+
+		if (toRedeem.Count == 0) {
+			return;
+		}
+
+		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Attempting to redeem {toRedeem.Count} unrevealed keys...");
+
+		int redeemed = 0;
+		int failed = 0;
+		bool cacheUpdated = false;
+
+		foreach (HumbleTpkInfo tpk in toRedeem) {
+			string? key = await webHandler.RedeemKeyAsync(tpk.MachineName, tpk.GameKey, tpk.KeyIndex).ConfigureAwait(false);
+
+			if (!string.IsNullOrEmpty(key)) {
+				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] REDEEMED: '{tpk.HumanName}' (AppID: {tpk.SteamAppId}) => {key}");
+				tpk.RedeemedKeyVal = key;
+				redeemed++;
+				cacheUpdated = true;
+			} else {
+				ASF.ArchiLogger.LogGenericWarning($"[{bot.BotName}] FAILED TO REDEEM: '{tpk.HumanName}' (AppID: {tpk.SteamAppId})");
+				failed++;
+			}
+
+			// Small delay between redemptions to avoid rate limiting
+			await Task.Delay(500).ConfigureAwait(false);
+		}
+
+		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Redeem results: {redeemed} succeeded, {failed} failed");
+
+		// Update cache with redeemed keys
+		if (cacheUpdated && BotCaches.TryGetValue(bot, out HumbleBundleBotCache? botCache)) {
+			botCache.CachedTpks = humbleTpks;
+			await botCache.SaveAsync().ConfigureAwait(false);
+			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Updated cache with {redeemed} newly redeemed keys");
+		}
+	}
+
+	private static void StartRedeemRetryTimer(Bot bot) {
+		// Dispose existing timer if any
+		if (BotRedeemTimers.TryRemove(bot, out System.Threading.Timer? existingTimer)) {
+			existingTimer.Dispose();
+		}
+
+		int intervalMinutes = BotRedeemIntervals.GetValueOrDefault(bot, 60);
+		TimeSpan interval = TimeSpan.FromMinutes(intervalMinutes);
+
+		System.Threading.Timer timer = new(
+			_ => _ = Task.Run(async () => await RetryRedeemAvailableKeys(bot).ConfigureAwait(false)),
+			null,
+			interval,
+			interval
+		);
+
+		BotRedeemTimers[bot] = timer;
+		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Redeem retry timer started (interval: {intervalMinutes} minutes)");
+	}
+
+	private static async Task RetryRedeemAvailableKeys(Bot bot) {
+		if (!BotHandlers.TryGetValue(bot, out HumbleBundleWebHandler? webHandler)) {
+			ASF.ArchiLogger.LogGenericDebug($"[{bot.BotName}] No web handler available for redeem retry");
+			return;
+		}
+
+		if (!BotHumbleTpks.TryGetValue(bot, out List<HumbleTpkInfo>? humbleTpks) || humbleTpks.Count == 0) {
+			ASF.ArchiLogger.LogGenericDebug($"[{bot.BotName}] No TPK data available for redeem retry");
+			return;
+		}
+
+		BotCountryCodes.TryGetValue(bot, out string? countryCode);
+
+		// Re-fetch order keys to check for newly available keys
+		List<string>? orderKeys = await webHandler.GetOrderKeysAsync().ConfigureAwait(false);
+
+		if (orderKeys == null) {
+			ASF.ArchiLogger.LogGenericWarning($"[{bot.BotName}] Failed to fetch order keys during redeem retry");
+			return;
+		}
+
+		// Check for new orders that weren't in the original set
+		HashSet<string> knownGameKeys = new(humbleTpks.Select(t => t.GameKey), StringComparer.OrdinalIgnoreCase);
+		List<string> newGameKeys = orderKeys.Where(key => !knownGameKeys.Contains(key)).ToList();
+
+		if (newGameKeys.Count > 0) {
+			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Redeem retry found {newGameKeys.Count} new orders");
+
+			Dictionary<string, JsonElement>? newOrders = await webHandler.GetAllOrdersIndividuallyAsync(newGameKeys).ConfigureAwait(false);
+
+			if (newOrders != null && newOrders.Count > 0) {
+				foreach ((string orderKey, JsonElement orderData) in newOrders) {
+					List<HumbleTpkInfo> orderTpks = ExtractSteamTpksFromOrder(bot.BotName, orderKey, orderData);
+					humbleTpks.AddRange(orderTpks);
+				}
+
+				BotHumbleTpks[bot] = humbleTpks;
+				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Updated TPK list, now {humbleTpks.Count} total");
+			}
+		}
+
+		// Build owned app set
+		HashSet<uint> ownedAppIds = new();
+
+		if (ASF.GlobalDatabase != null) {
+			foreach (uint packageId in bot.OwnedPackages.Keys) {
+				if (ASF.GlobalDatabase.PackagesDataReadOnly.TryGetValue(packageId, out PackageData? packageData) && packageData.AppIDs != null) {
+					foreach (uint appId in packageData.AppIDs) {
+						ownedAppIds.Add(appId);
+					}
+				}
+			}
+		}
+
+		// Attempt to redeem available keys
+		await RedeemAvailableKeys(bot, humbleTpks, ownedAppIds, countryCode).ConfigureAwait(false);
+
+		// Check if there are still unrevealed keys remaining
+		int remainingCount = humbleTpks.Count(t =>
+			string.IsNullOrEmpty(t.RedeemedKeyVal) && !t.IsExpired && !t.SoldOut && !t.IsGift
+			&& t.SteamAppId != 0 && !ownedAppIds.Contains(t.SteamAppId)
+			&& IsCountryAllowed(t, countryCode));
+
+		if (remainingCount == 0) {
+			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] All keys redeemed, stopping retry timer");
+
+			if (BotRedeemTimers.TryRemove(bot, out System.Threading.Timer? timer)) {
+				await timer.DisposeAsync().ConfigureAwait(false);
+			}
+		} else {
+			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] {remainingCount} keys still unredeemed, will retry later");
+		}
 	}
 
 	private static List<HumbleTpkInfo> ExtractSteamTpksFromOrder(string botName, string orderKey, JsonElement orderData) {
@@ -508,8 +727,10 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 				string? humanName = null;
 				string? machineName = null;
 				uint steamAppId = 0;
+				int keyIndex = 0;
 				bool isExpired = false;
 				bool soldOut = false;
+				bool isGift = false;
 				List<string> disallowedCountries = new();
 				List<string> exclusiveCountries = new();
 
@@ -533,11 +754,20 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 							}
 
 							break;
+						case "keyindex" when prop.Value.ValueKind == JsonValueKind.Number:
+							if (int.TryParse(prop.Value.GetRawText(), out int parsedKeyIndex)) {
+								keyIndex = parsedKeyIndex;
+							}
+
+							break;
 						case "is_expired":
 							isExpired = prop.Value.ValueKind == JsonValueKind.True;
 							break;
 						case "sold_out":
 							soldOut = prop.Value.ValueKind == JsonValueKind.True;
+							break;
+						case "is_gift":
+							isGift = prop.Value.ValueKind == JsonValueKind.True;
 							break;
 						case "disallowed_countries" when prop.Value.ValueKind == JsonValueKind.Array:
 							foreach (JsonElement country in prop.Value.EnumerateArray()) {
@@ -574,9 +804,11 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 					HumanName = humanName ?? "Unknown",
 					MachineName = machineName ?? "unknown",
 					SteamAppId = steamAppId,
+					KeyIndex = keyIndex,
 					RedeemedKeyVal = redeemedKeyVal,
 					IsExpired = isExpired,
 					SoldOut = soldOut,
+					IsGift = isGift,
 					DisallowedCountries = disallowedCountries,
 					ExclusiveCountries = exclusiveCountries
 				});
@@ -616,6 +848,12 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 						break;
 					case "HumbleBundleTwoFactorCode" when configValue.ValueKind == JsonValueKind.String:
 						config.TwoFactorCode = configValue.GetString();
+
+						break;
+					case "HumbleBundleRedeemRetryIntervalMinutes" when configValue.ValueKind == JsonValueKind.Number:
+						if (int.TryParse(configValue.GetRawText(), out int parsedInterval) && parsedInterval > 0) {
+							config.RedeemRetryIntervalMinutes = parsedInterval;
+						}
 
 						break;
 				}

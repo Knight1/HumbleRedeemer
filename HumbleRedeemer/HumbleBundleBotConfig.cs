@@ -19,6 +19,10 @@ public sealed class HumbleBundleBotConfig {
 	[JsonPropertyName("HumbleBundleTwoFactorCode")]
 	public string? TwoFactorCode { get; set; }
 
+	[JsonInclude]
+	[JsonPropertyName("HumbleBundleRedeemRetryIntervalMinutes")]
+	public int RedeemRetryIntervalMinutes { get; set; } = 60;
+
 	[JsonConstructor]
 	public HumbleBundleBotConfig() { }
 }
