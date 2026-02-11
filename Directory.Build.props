@@ -8,7 +8,7 @@
 
 	<PropertyGroup>
 		<ApplicationIcon />
-		<Authors>YourName</Authors>
+		<Authors>Knight1</Authors>
 		<Company>$(Authors)</Company>
 		<Copyright>Copyright © $([System.DateTime]::UtcNow.Year) $(Company)</Copyright>
 		<Description>$(PluginName) description.</Description>
