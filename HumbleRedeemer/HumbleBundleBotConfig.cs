@@ -35,6 +35,10 @@ public sealed class HumbleBundleBotConfig {
 	[JsonPropertyName("HumbleBundleUseGiftLinkForOwned")]
 	public bool UseGiftLinkForOwned { get; set; } = false;
 
+	[JsonInclude]
+	[JsonPropertyName("HumbleBundleRedeemOnlyWithExpiration")]
+	public bool RedeemOnlyWithExpiration { get; set; } = false;
+
 	[JsonConstructor]
 	public HumbleBundleBotConfig() { }
 }

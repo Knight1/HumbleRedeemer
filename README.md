@@ -33,7 +33,8 @@ Add HumbleBundle settings directly to your bot's configuration file in `config/<
   "HumbleBundleRedeemRetryIntervalMinutes": 60,
   "HumbleBundleIgnoreStoreLocation": false,
   "HumbleBundleAutoRetry": true,
-  "HumbleBundleUseGiftLinkForOwned": false
+  "HumbleBundleUseGiftLinkForOwned": false,
+  "HumbleBundleRedeemOnlyWithExpiration": false
 }
 ```
 
@@ -46,6 +47,7 @@ Add HumbleBundle settings directly to your bot's configuration file in `config/<
 - `HumbleBundleIgnoreStoreLocation` - If `true`, ignore region restrictions when redeeming keys (default: false)
 - `HumbleBundleAutoRetry` - If `true`, automatically retry redeeming failed keys periodically (default: true)
 - `HumbleBundleUseGiftLinkForOwned` - If `true`, redeem games already in your library as gift links instead of regular keys (default: false)
+- `HumbleBundleRedeemOnlyWithExpiration` - If `true`, only redeem keys that have an expiration date, skipping keys that never expire (default: false)
 
 ---
 

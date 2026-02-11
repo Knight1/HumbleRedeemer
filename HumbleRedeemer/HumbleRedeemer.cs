@@ -68,6 +68,10 @@ internal sealed class HumbleTpkInfo {
 	internal bool IsExpired { get; set; }
 
 	[JsonInclude]
+	[JsonPropertyName("ExpiryDate")]
+	internal DateTime? ExpiryDate { get; set; }
+
+	[JsonInclude]
 	[JsonPropertyName("SoldOut")]
 	internal bool SoldOut { get; set; }
 
@@ -570,9 +574,11 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 
 		BotConfigs.TryGetValue(bot, out HumbleBundleBotConfig? config);
 		bool useGiftLinkForOwned = config?.UseGiftLinkForOwned ?? false;
+		bool redeemOnlyWithExpiration = config?.RedeemOnlyWithExpiration ?? false;
 
 		// Collect eligible TPKs: unrevealed, not expired, not sold out, not already a gift, not country blocked
 		// If UseGiftLinkForOwned is true, also include games already owned (to redeem as gift links)
+		// If RedeemOnlyWithExpiration is true, only include keys that have an expiration date
 		List<(HumbleTpkInfo tpk, bool asGift)> toRedeem = new();
 
 		foreach (HumbleTpkInfo tpk in humbleTpks) {
@@ -581,6 +587,11 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 			}
 
 			if (!IsCountryAllowed(tpk, countryCode, ignoreStoreLocation)) {
+				continue;
+			}
+
+			// If RedeemOnlyWithExpiration is enabled, skip keys without an expiration date
+			if (redeemOnlyWithExpiration && !tpk.ExpiryDate.HasValue) {
 				continue;
 			}
 
@@ -906,6 +917,7 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 				uint steamAppId = 0;
 				int keyIndex = 0;
 				bool isExpired = false;
+				DateTime? expiryDate = null;
 				bool soldOut = false;
 				bool isGift = false;
 				List<string> disallowedCountries = new();
@@ -939,6 +951,13 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 							break;
 						case "is_expired":
 							isExpired = prop.Value.ValueKind == JsonValueKind.True;
+							break;
+						case "expiry_date" when prop.Value.ValueKind == JsonValueKind.String:
+							string? expiryStr = prop.Value.GetString();
+							if (!string.IsNullOrEmpty(expiryStr) && DateTime.TryParse(expiryStr, out DateTime parsedDate)) {
+								expiryDate = parsedDate;
+							}
+
 							break;
 						case "sold_out":
 							soldOut = prop.Value.ValueKind == JsonValueKind.True;
@@ -984,6 +1003,7 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 					KeyIndex = keyIndex,
 					RedeemedKeyVal = redeemedKeyVal,
 					IsExpired = isExpired,
+					ExpiryDate = expiryDate,
 					SoldOut = soldOut,
 					IsGift = isGift,
 					DisallowedCountries = disallowedCountries,
@@ -1111,6 +1131,14 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 						break;
 					case "HumbleBundleUseGiftLinkForOwned" when configValue.ValueKind == JsonValueKind.False:
 						config.UseGiftLinkForOwned = false;
+
+						break;
+					case "HumbleBundleRedeemOnlyWithExpiration" when configValue.ValueKind == JsonValueKind.True:
+						config.RedeemOnlyWithExpiration = true;
+
+						break;
+					case "HumbleBundleRedeemOnlyWithExpiration" when configValue.ValueKind == JsonValueKind.False:
+						config.RedeemOnlyWithExpiration = false;
 
 						break;
 				}
