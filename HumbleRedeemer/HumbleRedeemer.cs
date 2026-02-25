@@ -579,12 +579,15 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 		HashSet<uint> blacklistedAppIds = config?.BlacklistedAppIds != null
 			? new HashSet<uint>(config.BlacklistedAppIds)
 			: new HashSet<uint>();
+		HashSet<uint> redeemButNotToSteamAppIds = config?.RedeemButNotToSteamAppIds != null
+			? new HashSet<uint>(config.RedeemButNotToSteamAppIds)
+			: new HashSet<uint>();
 
 		// Collect eligible TPKs: unrevealed, not expired, not sold out, not already a gift, not country blocked
 		// If UseGiftLinkForOwned is true, also include games already owned (to redeem as gift links)
 		// If RedeemOnlyWithExpiration is true, only include keys that have an expiration date
 		// If SkipUnknownAppIds is true, skip keys without a Steam AppId
-		List<(HumbleTpkInfo tpk, bool asGift)> toRedeem = new();
+		List<(HumbleTpkInfo tpk, bool asGift, bool skipSteam)> toRedeem = new();
 
 		foreach (HumbleTpkInfo tpk in humbleTpks) {
 			if (!string.IsNullOrEmpty(tpk.RedeemedKeyVal) || tpk.IsExpired || tpk.SoldOut || tpk.IsGift) {
@@ -624,7 +627,8 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 
 			// Redeem as gift if already owned and UseGiftLinkForOwned is enabled
 			bool redeemAsGift = isOwned && useGiftLinkForOwned;
-			toRedeem.Add((tpk, redeemAsGift));
+			bool skipSteam = redeemButNotToSteamAppIds.Contains(tpk.SteamAppId);
+			toRedeem.Add((tpk, redeemAsGift, skipSteam));
 		}
 
 		if (toRedeem.Count == 0) {
@@ -635,16 +639,20 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 
 		int redeemed = 0;
 		int redeemedAsGift = 0;
+		int revealedNotForSteam = 0;
 		int failed = 0;
 		bool cacheUpdated = false;
 
-		foreach ((HumbleTpkInfo tpk, bool asGift) in toRedeem) {
+		foreach ((HumbleTpkInfo tpk, bool asGift, bool skipSteam) in toRedeem) {
 			string? key = await webHandler.RedeemKeyAsync(tpk.MachineName, tpk.GameKey, tpk.KeyIndex, asGift).ConfigureAwait(false);
 
 			if (!string.IsNullOrEmpty(key)) {
 				if (asGift) {
 					ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] REDEEMED AS GIFT: '{tpk.HumanName}' (AppID: {tpk.SteamAppId}) => {key}");
 					redeemedAsGift++;
+				} else if (skipSteam) {
+					ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] REVEALED (not redeemed on Steam): '{tpk.HumanName}' (AppID: {tpk.SteamAppId}) => {key}");
+					revealedNotForSteam++;
 				} else {
 					ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] REDEEMED: '{tpk.HumanName}' (AppID: {tpk.SteamAppId}) => {key}");
 				}
@@ -660,8 +668,10 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 			await Task.Delay(500).ConfigureAwait(false);
 		}
 
-		if (redeemedAsGift > 0) {
-			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Redeem results: {redeemed - redeemedAsGift} succeeded, {redeemedAsGift} redeemed as gift links, {failed} failed");
+		int normalRedeemed = redeemed - redeemedAsGift - revealedNotForSteam;
+
+		if (redeemedAsGift > 0 || revealedNotForSteam > 0) {
+			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Redeem results: {normalRedeemed} succeeded, {redeemedAsGift} redeemed as gift links, {revealedNotForSteam} revealed (not for Steam), {failed} failed");
 		} else {
 			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Redeem results: {redeemed} succeeded, {failed} failed");
 		}
