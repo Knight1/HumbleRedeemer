@@ -34,11 +34,17 @@ Add HumbleBundle settings directly to your bot's configuration file in `config/<
   "HumbleBundleIgnoreStoreLocation": false,
   "HumbleBundleAutoRetry": true,
   "HumbleBundleUseGiftLinkForOwned": false,
-  "HumbleBundleRedeemOnlyWithExpiration": false
+  "HumbleBundleRedeemOnlyWithExpiration": false,
+  "HumbleBundleBlacklistedGameKeys": [],
+  "HumbleBundleBlacklistedAppIds": [],
+  "HumbleBundleRedeemButNotToSteamAppIds": [],
+  "HumbleBundleSkipUnknownAppIds": false,
+  "HumbleBundleIgnoreStoreLocationButRedeem": false
 }
 ```
 
 **Configuration Properties:**
+
 - `HumbleBundleEnabled` - Set to `true` to enable HumbleBundle for this bot
 - `HumbleBundleUsername` - Your HumbleBundle account email
 - `HumbleBundlePassword` - Your HumbleBundle account password
@@ -48,6 +54,11 @@ Add HumbleBundle settings directly to your bot's configuration file in `config/<
 - `HumbleBundleAutoRetry` - If `true`, automatically retry redeeming failed keys periodically (default: true)
 - `HumbleBundleUseGiftLinkForOwned` - If `true`, redeem games already in your library as gift links instead of regular keys (default: false)
 - `HumbleBundleRedeemOnlyWithExpiration` - If `true`, only redeem keys that have an expiration date, skipping keys that never expire (default: false)
+- `HumbleBundleBlacklistedGameKeys` - List of Humble Bundle game keys to skip during order fetching (replaces hardcoded list). Example: `["X", "Y"]` (default: [])
+- `HumbleBundleBlacklistedAppIds` - List of Steam App IDs to never redeem. Example: `[730, 570]` (default: [])
+- `HumbleBundleRedeemButNotToSteamAppIds` - List of Steam App IDs to reveal keys for but not send to Steam (functionality not yet implemented). Example: `[730, 570]` (default: [])
+- `HumbleBundleSkipUnknownAppIds` - If `true`, skip redeeming keys that don't have a Steam App ID set (default: false)
+- `HumbleBundleIgnoreStoreLocationButRedeem` - If `true`, reveal keys ignoring region restrictions but don't send them to Steam (functionality not yet implemented) (default: false)
 
 ---
 

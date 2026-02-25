@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Text.Json.Serialization;
 
 namespace HumbleRedeemer;
@@ -38,6 +40,26 @@ public sealed class HumbleBundleBotConfig {
 	[JsonInclude]
 	[JsonPropertyName("HumbleBundleRedeemOnlyWithExpiration")]
 	public bool RedeemOnlyWithExpiration { get; set; } = false;
+
+	[JsonInclude]
+	[JsonPropertyName("HumbleBundleBlacklistedGameKeys")]
+	public Collection<string> BlacklistedGameKeys { get; } = new();
+
+	[JsonInclude]
+	[JsonPropertyName("HumbleBundleBlacklistedAppIds")]
+	public Collection<uint> BlacklistedAppIds { get; } = new();
+
+	[JsonInclude]
+	[JsonPropertyName("HumbleBundleRedeemButNotToSteamAppIds")]
+	public Collection<uint> RedeemButNotToSteamAppIds { get; } = new();
+
+	[JsonInclude]
+	[JsonPropertyName("HumbleBundleSkipUnknownAppIds")]
+	public bool SkipUnknownAppIds { get; set; } = false;
+
+	[JsonInclude]
+	[JsonPropertyName("HumbleBundleIgnoreStoreLocationButRedeem")]
+	public bool IgnoreStoreLocationButRedeem { get; set; } = false;
 
 	[JsonConstructor]
 	public HumbleBundleBotConfig() { }

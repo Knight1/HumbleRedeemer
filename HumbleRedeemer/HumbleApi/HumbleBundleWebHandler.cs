@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Threading;
@@ -14,15 +15,19 @@ internal sealed partial class HumbleBundleWebHandler : IDisposable {
 	private readonly SemaphoreSlim LoginSemaphore = new(1, 1);
 	private readonly HumbleBundleBotCache BotCache;
 	private readonly string BotName;
+	private readonly HashSet<string> ConfiguredBlacklistedGameKeys;
 
 	private bool IsLoggedIn;
 
-	internal HumbleBundleWebHandler(HumbleBundleBotCache botCache, string botName) {
+	internal HumbleBundleWebHandler(HumbleBundleBotCache botCache, string botName, IEnumerable<string>? blacklistedGameKeys = null) {
 		ArgumentNullException.ThrowIfNull(botCache);
 		ArgumentException.ThrowIfNullOrEmpty(botName);
 
 		BotCache = botCache;
 		BotName = botName;
+		ConfiguredBlacklistedGameKeys = blacklistedGameKeys != null
+			? new HashSet<string>(blacklistedGameKeys, StringComparer.OrdinalIgnoreCase)
+			: new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
 		CookieContainer = new CookieContainer();
 

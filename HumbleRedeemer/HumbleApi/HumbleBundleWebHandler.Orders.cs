@@ -11,29 +11,6 @@ using ArchiSteamFarm.Helpers.Json;
 namespace HumbleRedeemer;
 
 internal sealed partial class HumbleBundleWebHandler {
-	/// <summary>
-	/// Hardcoded list of gamekeys to ignore due to Optimizely injection breaking JSON parsing
-	/// This is a temporary workaround until HumbleBundle fixes the issue
-	/// </summary>
-	private static readonly HashSet<string> BlacklistedGameKeys = new(StringComparer.OrdinalIgnoreCase) {
-		"7ZB3spP3bqqYDBx7",
-		"DREbpFf3aUhAqh5h",
-		"F2Pewb6v8YpxrXAr",
-		"M4wwetWcsAfENF2r",
-		"ME2dAwrvzXsFPD6U",
-		"N37brXhAhbP7RVFW",
-		"Pfcr8RKDTk23dVFs",
-		"PnnkyeSdFbK7CWNZ",
-		"RDCNaNpPYrEc73SR",
-		"hKdtsxyFhwaWRkNp",
-		"sqGdZ83kVAzrXasy",
-		"NhThaUB7eycF",
-		"WCev2xb7ekHh",
-		"-KSebnNc2bbAhExP3",
-		"NAt44VcvTZ7mPpGS",
-		"m7KerVbswrZdXZd5",
-		"KSebnNc2bbAhExP3"
-	};
 
 	/// <summary>
 	/// Get all order keys from HumbleBundle using the user/order API
@@ -154,9 +131,9 @@ internal sealed partial class HumbleBundleWebHandler {
 			for (int i = 0; i < gameKeys.Count; i++) {
 				string gameKey = gameKeys[i];
 
-				// Skip blacklisted gamekeys (Optimizely injection issue)
-				if (BlacklistedGameKeys.Contains(gameKey)) {
-					ASF.ArchiLogger.LogGenericWarning($"[{BotName}] Skipping blacklisted gamekey: {gameKey} (Optimizely injection issue)");
+				// Skip blacklisted gamekeys (configured list)
+				if (ConfiguredBlacklistedGameKeys.Contains(gameKey)) {
+					ASF.ArchiLogger.LogGenericWarning($"[{BotName}] Skipping blacklisted gamekey: {gameKey}");
 					blacklistedCount++;
 					continue;
 				}

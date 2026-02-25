@@ -148,7 +148,7 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 		HumbleBundleBotCache botCache = await HumbleBundleBotCache.CreateOrLoad(cacheFilePath).ConfigureAwait(false);
 
 		// Create web handler for this bot
-		HumbleBundleWebHandler webHandler = new(botCache, bot.BotName);
+		HumbleBundleWebHandler webHandler = new(botCache, bot.BotName, config.BlacklistedGameKeys);
 
 		// Try to load saved cookies first
 		bool cookiesLoaded = await webHandler.LoadCookiesAsync().ConfigureAwait(false);
@@ -575,14 +575,34 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 		BotConfigs.TryGetValue(bot, out HumbleBundleBotConfig? config);
 		bool useGiftLinkForOwned = config?.UseGiftLinkForOwned ?? false;
 		bool redeemOnlyWithExpiration = config?.RedeemOnlyWithExpiration ?? false;
+		bool skipUnknownAppIds = config?.SkipUnknownAppIds ?? false;
+		HashSet<uint> blacklistedAppIds = config?.BlacklistedAppIds != null
+			? new HashSet<uint>(config.BlacklistedAppIds)
+			: new HashSet<uint>();
 
 		// Collect eligible TPKs: unrevealed, not expired, not sold out, not already a gift, not country blocked
 		// If UseGiftLinkForOwned is true, also include games already owned (to redeem as gift links)
 		// If RedeemOnlyWithExpiration is true, only include keys that have an expiration date
+		// If SkipUnknownAppIds is true, skip keys without a Steam AppId
 		List<(HumbleTpkInfo tpk, bool asGift)> toRedeem = new();
 
 		foreach (HumbleTpkInfo tpk in humbleTpks) {
-			if (!string.IsNullOrEmpty(tpk.RedeemedKeyVal) || tpk.IsExpired || tpk.SoldOut || tpk.IsGift || tpk.SteamAppId == 0) {
+			if (!string.IsNullOrEmpty(tpk.RedeemedKeyVal) || tpk.IsExpired || tpk.SoldOut || tpk.IsGift) {
+				continue;
+			}
+
+			// Skip if AppId is unknown and the option is enabled
+			if (skipUnknownAppIds && tpk.SteamAppId == 0) {
+				continue;
+			}
+
+			// Skip if current logic requires AppId but it's missing
+			if (tpk.SteamAppId == 0) {
+				continue;
+			}
+
+			// Skip if AppId is blacklisted
+			if (blacklistedAppIds.Contains(tpk.SteamAppId)) {
 				continue;
 			}
 
@@ -1139,6 +1159,53 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 						break;
 					case "HumbleBundleRedeemOnlyWithExpiration" when configValue.ValueKind == JsonValueKind.False:
 						config.RedeemOnlyWithExpiration = false;
+
+						break;
+					case "HumbleBundleBlacklistedGameKeys" when configValue.ValueKind == JsonValueKind.Array:
+						foreach (JsonElement item in configValue.EnumerateArray()) {
+							if (item.ValueKind == JsonValueKind.String) {
+								string? gameKey = item.GetString();
+								if (!string.IsNullOrEmpty(gameKey)) {
+									config.BlacklistedGameKeys.Add(gameKey);
+								}
+							}
+						}
+
+						break;
+					case "HumbleBundleBlacklistedAppIds" when configValue.ValueKind == JsonValueKind.Array:
+						foreach (JsonElement item in configValue.EnumerateArray()) {
+							if (item.ValueKind == JsonValueKind.Number) {
+								if (uint.TryParse(item.GetRawText(), out uint appId)) {
+									config.BlacklistedAppIds.Add(appId);
+								}
+							}
+						}
+
+						break;
+					case "HumbleBundleRedeemButNotToSteamAppIds" when configValue.ValueKind == JsonValueKind.Array:
+						foreach (JsonElement item in configValue.EnumerateArray()) {
+							if (item.ValueKind == JsonValueKind.Number) {
+								if (uint.TryParse(item.GetRawText(), out uint appId)) {
+									config.RedeemButNotToSteamAppIds.Add(appId);
+								}
+							}
+						}
+
+						break;
+					case "HumbleBundleSkipUnknownAppIds" when configValue.ValueKind == JsonValueKind.True:
+						config.SkipUnknownAppIds = true;
+
+						break;
+					case "HumbleBundleSkipUnknownAppIds" when configValue.ValueKind == JsonValueKind.False:
+						config.SkipUnknownAppIds = false;
+
+						break;
+					case "HumbleBundleIgnoreStoreLocationButRedeem" when configValue.ValueKind == JsonValueKind.True:
+						config.IgnoreStoreLocationButRedeem = true;
+
+						break;
+					case "HumbleBundleIgnoreStoreLocationButRedeem" when configValue.ValueKind == JsonValueKind.False:
+						config.IgnoreStoreLocationButRedeem = false;
 
 						break;
 				}
