@@ -10,14 +10,14 @@
 
 This plugin enables automatic login and session management for HumbleBundle.com within the ASF framework.
 
-My motivation for this topic came after I read about Steam Keys beeing replaced by Epic Games with keyless keys. So you can no longer share that ~~key~~ license after you tried to redeem it.
+My motivation for this topic came after I read about Steam keys beeing replaced by Epic Games with keyless keys. So you can no longer share that ~~key~~ license after you tried to redeem it.
 
-public gift links -> account banned with everything
-expired keys
-sold out keys... WTF??? So HumbleBundle sells keys which they do not have...
-Choice is an Abo but the keys expire now too
-Region Lock
-non exhausted keys but trying to redeem says they are exhausted.
+- public gift links shared outside family and friends -> account banned with everything
+- expired keys
+- sold out keys... WTF??? So HumbleBundle sells keys which they do not have...
+- Choice is an Abo but the keys expire now too
+- Region Lock
+- non exhausted keys but trying to redeem says they are exhausted.
 
 ---
 
@@ -67,7 +67,7 @@ Add HumbleBundle settings directly to your bot's configuration file in `config/<
 - `HumbleBundleBlacklistedAppIds` - List of Steam App IDs to never redeem. Example: `[730, 570]` (default: [])
 - `HumbleBundleRedeemButNotToSteamAppIds` - List of Steam App IDs to reveal keys for but not send to Steam. Example: `[730, 570]` (default: [])
 - `HumbleBundleSkipUnknownAppIds` - If `true`, skip redeeming keys that don't have a Steam App ID set (default: false)
-- `HumbleBundleIgnoreStoreLocationButRedeem` - If `true`, reveal keys ignoring region restrictions but don't send them to Steam (functionality not yet implemented) (default: false)
+- `HumbleBundleIgnoreStoreLocationButRedeem` - If `true`, reveal keys ignoring region restrictions but don't send them to Steam (default: false)
 
 ---
 
