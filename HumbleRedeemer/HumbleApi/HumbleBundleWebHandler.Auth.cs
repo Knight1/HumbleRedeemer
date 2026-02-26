@@ -255,24 +255,44 @@ internal sealed partial class HumbleBundleWebHandler {
 					{ "code", twoFactorCode }
 				};
 
-				using HttpRequestMessage twoFactorRequest = new(HttpMethod.Post, "/processlogin") {
-					Content = new FormUrlEncodedContent(twoFactorLoginData)
-				};
+			// Retry 2FA submission for up to 30 seconds (Authy codes are only valid for ~30s and Cloudflare may transiently block)
+				DateTime twoFactorDeadline = DateTime.UtcNow.AddSeconds(30);
+				bool twoFactorSuccess = false;
 
-				twoFactorRequest.Headers.Add("Referer", $"{BaseUrl}/login");
-				twoFactorRequest.Headers.Add("Origin", BaseUrl);
-				if (csrfCookie != null) {
-					twoFactorRequest.Headers.Add("csrf-prevention-token", csrfCookie.Value);
+				while (DateTime.UtcNow < twoFactorDeadline) {
+					using HttpRequestMessage twoFactorRequest = new(HttpMethod.Post, "/processlogin") {
+						Content = new FormUrlEncodedContent(twoFactorLoginData)
+					};
+
+					twoFactorRequest.Headers.Add("Referer", $"{BaseUrl}/login");
+					twoFactorRequest.Headers.Add("Origin", BaseUrl);
+					if (csrfCookie != null) {
+						twoFactorRequest.Headers.Add("csrf-prevention-token", csrfCookie.Value);
+					}
+
+					HttpResponseMessage twoFactorResponse = await HttpClient.SendAsync(twoFactorRequest).ConfigureAwait(false);
+
+					string twoFactorResponseText = await twoFactorResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
+					ASF.ArchiLogger.LogGenericDebug($"[{BotName}] 2FA response status: {twoFactorResponse.StatusCode}");
+					ASF.ArchiLogger.LogGenericDebug($"[{BotName}] 2FA response: {twoFactorResponseText[..Math.Min(500, twoFactorResponseText.Length)]}");
+
+					if (twoFactorResponse.IsSuccessStatusCode) {
+						twoFactorSuccess = true;
+						break;
+					}
+
+					TimeSpan remaining = twoFactorDeadline - DateTime.UtcNow;
+					if (remaining <= TimeSpan.Zero) {
+						ASF.ArchiLogger.LogGenericError($"[{BotName}] Two-factor authentication failed: {twoFactorResponse.StatusCode}");
+						return false;
+					}
+
+					ASF.ArchiLogger.LogGenericWarning($"[{BotName}] Two-factor authentication attempt failed ({twoFactorResponse.StatusCode}), retrying... ({remaining.TotalSeconds:F0}s remaining)");
+					await Task.Delay(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
 				}
 
-				HttpResponseMessage twoFactorResponse = await HttpClient.SendAsync(twoFactorRequest).ConfigureAwait(false);
-
-				string twoFactorResponseText = await twoFactorResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
-				ASF.ArchiLogger.LogGenericDebug($"[{BotName}] 2FA response status: {twoFactorResponse.StatusCode}");
-				ASF.ArchiLogger.LogGenericDebug($"[{BotName}] 2FA response: {twoFactorResponseText[..Math.Min(500, twoFactorResponseText.Length)]}");
-
-				if (!twoFactorResponse.IsSuccessStatusCode) {
-					ASF.ArchiLogger.LogGenericError($"[{BotName}] Two-factor authentication failed: {twoFactorResponse.StatusCode}");
+				if (!twoFactorSuccess) {
+					ASF.ArchiLogger.LogGenericError($"[{BotName}] Two-factor authentication failed after retrying for 30 seconds");
 					return false;
 				}
 
