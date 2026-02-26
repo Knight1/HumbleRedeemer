@@ -178,7 +178,10 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 		}
 
 		// Auto-pay current month before fetching orders so the new gamekey is in the list
-		await TryAutoPayCurrentMonthAsync(bot, webHandler, config).ConfigureAwait(false);
+		await TryAutoPayCurrentMonthAsync(bot, botCache, webHandler, config).ConfigureAwait(false);
+
+		// Claim all Trove games if configured
+		await ClaimAllTroveGamesAsync(bot, botCache, webHandler, config).ConfigureAwait(false);
 
 		// Test API by fetching order keys
 		List<string>? orderKeys = await webHandler.GetOrderKeysAsync().ConfigureAwait(false);
@@ -846,12 +849,73 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 	}
 
 	/// <summary>
+	/// Claims all Humble Trove games to the account by calling the sign URL endpoint for each
+	/// unclaimed game. Already-claimed games are tracked in the bot cache to avoid redundant calls.
+	/// </summary>
+	private static async Task ClaimAllTroveGamesAsync(Bot bot, HumbleBundleBotCache botCache, HumbleBundleWebHandler webHandler, HumbleBundleBotConfig config) {
+		if (!config.ClaimTroveGames) {
+			return;
+		}
+
+		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Fetching Humble Trove game list...");
+
+		List<TroveGameInfo>? troveGames = await webHandler.GetAllTroveGamesAsync().ConfigureAwait(false);
+
+		if (troveGames == null || troveGames.Count == 0) {
+			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] No Trove games found");
+			return;
+		}
+
+		HashSet<string> alreadyClaimed = new(botCache.ClaimedTroveGames, StringComparer.OrdinalIgnoreCase);
+
+		int newlyClaimed = 0;
+		int skipped = 0;
+		bool cacheUpdated = false;
+
+		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Found {troveGames.Count} Trove games, {alreadyClaimed.Count} already claimed");
+
+		foreach (TroveGameInfo game in troveGames) {
+			if (alreadyClaimed.Contains(game.GameMachineName)) {
+				skipped++;
+				continue;
+			}
+
+			bool success = await webHandler.ClaimTroveGameAsync(game.DownloadMachineName, game.Filename).ConfigureAwait(false);
+
+			if (success) {
+				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Claimed Trove game: {game.HumanName} ({game.GameMachineName})");
+				botCache.ClaimedTroveGames.Add(game.GameMachineName);
+				alreadyClaimed.Add(game.GameMachineName);
+				newlyClaimed++;
+				cacheUpdated = true;
+			} else {
+				ASF.ArchiLogger.LogGenericWarning($"[{bot.BotName}] Failed to claim Trove game: {game.HumanName} ({game.GameMachineName})");
+			}
+
+			// Small delay to avoid rate limiting
+			await Task.Delay(100).ConfigureAwait(false);
+		}
+
+		if (cacheUpdated) {
+			await botCache.SaveAsync().ConfigureAwait(false);
+		}
+
+		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Trove claiming complete: {newlyClaimed} newly claimed, {skipped} already claimed");
+	}
+
+	/// <summary>
 	/// If AutoPayMonthly is enabled, find and pay for the current unpaid Humble Choice month.
 	/// Stores the resulting gamekey in BotPaidGameKeys so downstream processing can apply
 	/// PayMonthlyButNotReveal / PayMonthlyRevealButNotToSteam config flags.
 	/// </summary>
-	private static async Task TryAutoPayCurrentMonthAsync(Bot bot, HumbleBundleWebHandler webHandler, HumbleBundleBotConfig config) {
+	private static async Task TryAutoPayCurrentMonthAsync(Bot bot, HumbleBundleBotCache botCache, HumbleBundleWebHandler webHandler, HumbleBundleBotConfig config) {
 		if (!config.AutoPayMonthly) {
+			return;
+		}
+
+		// Only attempt payment once per UTC calendar day to avoid charging on every restart
+		if (botCache.LastAutoPayDate.HasValue && botCache.LastAutoPayDate.Value.Date == DateTime.UtcNow.Date) {
+			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] AutoPayMonthly already attempted today ({botCache.LastAutoPayDate.Value:yyyy-MM-dd}), skipping");
 			return;
 		}
 
@@ -861,6 +925,8 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 
 		if (unpaidMonth == null) {
 			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] No unpaid month found (or not a subscriber)");
+			botCache.LastAutoPayDate = DateTime.UtcNow;
+			await botCache.SaveAsync().ConfigureAwait(false);
 			return;
 		}
 
@@ -886,6 +952,9 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Successfully paid for {unpaidMonth.HumanName} ({mode}), gamekey: {gameKey}");
 
 		BotPaidGameKeys[bot] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { gameKey };
+
+		botCache.LastAutoPayDate = DateTime.UtcNow;
+		await botCache.SaveAsync().ConfigureAwait(false);
 	}
 
 	private static async Task RetryRedeemAvailableKeys(Bot bot) {
@@ -1328,6 +1397,14 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 						break;
 					case "HumbleBundlePayMonthlyRevealButNotToSteam" when configValue.ValueKind == JsonValueKind.False:
 						config.PayMonthlyRevealButNotToSteam = false;
+
+						break;
+					case "HumbleBundleClaimTroveGames" when configValue.ValueKind == JsonValueKind.True:
+						config.ClaimTroveGames = true;
+
+						break;
+					case "HumbleBundleClaimTroveGames" when configValue.ValueKind == JsonValueKind.False:
+						config.ClaimTroveGames = false;
 
 						break;
 				}
