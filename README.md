@@ -51,7 +51,8 @@ Add HumbleBundle settings directly to your bot's configuration file in `config/<
   "HumbleBundleIgnoreStoreLocationButRedeem": false,
   "HumbleBundleAutoPayMonthly": false,
   "HumbleBundlePayMonthlyButNotReveal": false,
-  "HumbleBundlePayMonthlyRevealButNotToSteam": false
+  "HumbleBundlePayMonthlyRevealButNotToSteam": false,
+  "HumbleBundleClaimTroveGames": false
 }
 ```
 
@@ -74,6 +75,7 @@ Add HumbleBundle settings directly to your bot's configuration file in `config/<
 - `HumbleBundleAutoPayMonthly` - If `true`, automatically pay for the current Humble Choice month if it hasn't been paid yet (default: false)
 - `HumbleBundlePayMonthlyButNotReveal` - If `true` (requires `HumbleBundleAutoPayMonthly`), pay for the current month but do not reveal any keys (default: false)
 - `HumbleBundlePayMonthlyRevealButNotToSteam` - If `true` (requires `HumbleBundleAutoPayMonthly`), pay and reveal keys for the current month but do not send them to Steam (default: false)
+- `HumbleBundleClaimTroveGames` - If `true`, register all Humble Trove games to the account so they remain accessible after the subscription ends. Games are only claimed once and tracked in the bot cache (default: false)
 
 ---
 
