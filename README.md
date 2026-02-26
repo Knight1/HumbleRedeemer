@@ -52,7 +52,7 @@ Add HumbleBundle settings directly to your bot's configuration file in `config/<
   "HumbleBundleAutoPayMonthly": false,
   "HumbleBundlePayMonthlyButNotReveal": false,
   "HumbleBundlePayMonthlyRevealButNotToSteam": false,
-  "HumbleBundleClaimTroveGames": false
+  "HumbleBundleClaimVaultGames": false
 }
 ```
 
@@ -60,7 +60,7 @@ Add HumbleBundle settings directly to your bot's configuration file in `config/<
 
 - `HumbleBundleEnabled` - Set to `true` to enable HumbleBundle for this bot
 - `HumbleBundleUsername` - Your HumbleBundle account email
-- `HumbleBundlePassword` - Your HumbleBundle account password
+- `HumbleBundlePassword` - Your HumbleBundle account password. If omitted and ASF is not running in headless mode, the password will be prompted on the console at startup
 - `HumbleBundleTwoFactorCode` - Optional 2FA secret, otherwise you will be asked for the 6 digit code
 - `HumbleBundleRedeemRetryIntervalMinutes` - Interval in minutes for retrying failed redemptions (default: 60)
 - `HumbleBundleIgnoreStoreLocation` - If `true`, ignore region restrictions when redeeming keys (default: false)
@@ -75,7 +75,7 @@ Add HumbleBundle settings directly to your bot's configuration file in `config/<
 - `HumbleBundleAutoPayMonthly` - If `true`, automatically pay for the current Humble Choice month if it hasn't been paid yet (default: false)
 - `HumbleBundlePayMonthlyButNotReveal` - If `true` (requires `HumbleBundleAutoPayMonthly`), pay for the current month but do not reveal any keys (default: false)
 - `HumbleBundlePayMonthlyRevealButNotToSteam` - If `true` (requires `HumbleBundleAutoPayMonthly`), pay and reveal keys for the current month but do not send them to Steam (default: false)
-- `HumbleBundleClaimTroveGames` - If `true`, register all Humble Trove games to the account so they remain accessible after the subscription ends. Games are only claimed once and tracked in the bot cache (default: false)
+- `HumbleBundleClaimVaultGames` - If `true`, register all Humble Vault games to the account so they remain accessible after the subscription ends. Games are only claimed once and tracked in the bot cache (default: false)
 
 ---
 

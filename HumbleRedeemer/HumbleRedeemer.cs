@@ -141,11 +141,6 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 			return;
 		}
 
-		if (string.IsNullOrEmpty(config.Username) || string.IsNullOrEmpty(config.Password)) {
-			ASF.ArchiLogger.LogGenericWarning($"[{bot.BotName}] HumbleBundle credentials not configured. Add HumbleBundleUsername and HumbleBundlePassword to bot config.");
-			return;
-		}
-
 		// Load bot cache
 		string cacheFilePath = Path.Combine(ArchiSteamFarm.SharedInfo.ConfigDirectory, $"HumbleRedeemer-{bot.BotName}.cache");
 		HumbleBundleBotCache botCache = await HumbleBundleBotCache.CreateOrLoad(cacheFilePath).ConfigureAwait(false);
@@ -157,12 +152,40 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 		bool cookiesLoaded = await webHandler.LoadCookiesAsync().ConfigureAwait(false);
 
 		if (!cookiesLoaded) {
+			// No valid saved session — credentials are required for a fresh login
+			if (string.IsNullOrEmpty(config.Username)) {
+				ASF.ArchiLogger.LogGenericWarning($"[{bot.BotName}] HumbleBundle username not configured. Add HumbleBundleUsername to bot config.");
+				webHandler.Dispose();
+				return;
+			}
+
+			string? password = config.Password;
+
+			if (string.IsNullOrEmpty(password)) {
+				bool isHeadless = ASF.GlobalConfig?.Headless ?? true;
+
+				if (isHeadless) {
+					ASF.ArchiLogger.LogGenericWarning($"[{bot.BotName}] HumbleBundle credentials not configured. Add HumbleBundleUsername and HumbleBundlePassword to bot config.");
+					webHandler.Dispose();
+					return;
+				}
+
+				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Please enter your HumbleBundle password:");
+				password = Console.ReadLine()?.Trim();
+
+				if (string.IsNullOrEmpty(password)) {
+					ASF.ArchiLogger.LogGenericError($"[{bot.BotName}] No password entered.");
+					webHandler.Dispose();
+					return;
+				}
+			}
+
 			// No valid saved session, perform login
 			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] No valid HumbleBundle session found, attempting login...");
 
 			bool loginSuccess = await webHandler.LoginAsync(
 				config.Username,
-				config.Password,
+				password,
 				config.TwoFactorCode,
 				bot
 			).ConfigureAwait(false);
@@ -180,8 +203,8 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 		// Auto-pay current month before fetching orders so the new gamekey is in the list
 		await TryAutoPayCurrentMonthAsync(bot, botCache, webHandler, config).ConfigureAwait(false);
 
-		// Claim all Trove games if configured
-		await ClaimAllTroveGamesAsync(bot, botCache, webHandler, config).ConfigureAwait(false);
+		// Claim all Vault games if configured
+		await ClaimAllVaultGamesAsync(bot, botCache, webHandler, config).ConfigureAwait(false);
 
 		// Test API by fetching order keys
 		List<string>? orderKeys = await webHandler.GetOrderKeysAsync().ConfigureAwait(false);
@@ -849,47 +872,47 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 	}
 
 	/// <summary>
-	/// Claims all Humble Trove games to the account by calling the sign URL endpoint for each
+	/// Claims all Humble Vault games to the account by calling the sign URL endpoint for each
 	/// unclaimed game. Already-claimed games are tracked in the bot cache to avoid redundant calls.
 	/// </summary>
-	private static async Task ClaimAllTroveGamesAsync(Bot bot, HumbleBundleBotCache botCache, HumbleBundleWebHandler webHandler, HumbleBundleBotConfig config) {
-		if (!config.ClaimTroveGames) {
+	private static async Task ClaimAllVaultGamesAsync(Bot bot, HumbleBundleBotCache botCache, HumbleBundleWebHandler webHandler, HumbleBundleBotConfig config) {
+		if (!config.ClaimVaultGames) {
 			return;
 		}
 
-		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Fetching Humble Trove game list...");
+		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Fetching Humble Vault game list...");
 
-		List<TroveGameInfo>? troveGames = await webHandler.GetAllTroveGamesAsync().ConfigureAwait(false);
+		List<VaultGameInfo>? vaultGames = await webHandler.GetAllVaultGamesAsync().ConfigureAwait(false);
 
-		if (troveGames == null || troveGames.Count == 0) {
-			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] No Trove games found");
+		if (vaultGames == null || vaultGames.Count == 0) {
+			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] No Vault games found");
 			return;
 		}
 
-		HashSet<string> alreadyClaimed = new(botCache.ClaimedTroveGames, StringComparer.OrdinalIgnoreCase);
+		HashSet<string> alreadyClaimed = new(botCache.ClaimedVaultGames, StringComparer.OrdinalIgnoreCase);
 
 		int newlyClaimed = 0;
 		int skipped = 0;
 		bool cacheUpdated = false;
 
-		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Found {troveGames.Count} Trove games, {alreadyClaimed.Count} already claimed");
+		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Found {vaultGames.Count} Vault games, {alreadyClaimed.Count} already claimed");
 
-		foreach (TroveGameInfo game in troveGames) {
+		foreach (VaultGameInfo game in vaultGames) {
 			if (alreadyClaimed.Contains(game.GameMachineName)) {
 				skipped++;
 				continue;
 			}
 
-			bool success = await webHandler.ClaimTroveGameAsync(game.DownloadMachineName, game.Filename).ConfigureAwait(false);
+			bool success = await webHandler.ClaimVaultGameAsync(game.DownloadMachineName, game.Filename).ConfigureAwait(false);
 
 			if (success) {
-				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Claimed Trove game: {game.HumanName} ({game.GameMachineName})");
-				botCache.ClaimedTroveGames.Add(game.GameMachineName);
+				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Claimed Vault game: {game.HumanName} ({game.GameMachineName})");
+				botCache.ClaimedVaultGames.Add(game.GameMachineName);
 				alreadyClaimed.Add(game.GameMachineName);
 				newlyClaimed++;
 				cacheUpdated = true;
 			} else {
-				ASF.ArchiLogger.LogGenericWarning($"[{bot.BotName}] Failed to claim Trove game: {game.HumanName} ({game.GameMachineName})");
+				ASF.ArchiLogger.LogGenericWarning($"[{bot.BotName}] Failed to claim Vault game: {game.HumanName} ({game.GameMachineName})");
 			}
 
 			// Small delay to avoid rate limiting
@@ -900,7 +923,7 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 			await botCache.SaveAsync().ConfigureAwait(false);
 		}
 
-		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Trove claiming complete: {newlyClaimed} newly claimed, {skipped} already claimed");
+		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Vault claiming complete: {newlyClaimed} newly claimed, {skipped} already claimed");
 	}
 
 	/// <summary>
@@ -934,8 +957,16 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 
 		string? jobId = await webHandler.PayEarlyAsync(unpaidMonth.MachineName, unpaidMonth.ChoiceUrl).ConfigureAwait(false);
 
-		if (string.IsNullOrEmpty(jobId)) {
+		if (jobId == null) {
 			ASF.ArchiLogger.LogGenericError($"[{bot.BotName}] Failed to initiate payment for {unpaidMonth.HumanName}");
+			return;
+		}
+
+		if (jobId.Length == 0) {
+			// Payment was already in progress (initiated externally or by a previous run)
+			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] {unpaidMonth.HumanName} payment already in progress, skipping");
+			botCache.LastAutoPayDate = DateTime.UtcNow;
+			await botCache.SaveAsync().ConfigureAwait(false);
 			return;
 		}
 
@@ -1399,12 +1430,12 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 						config.PayMonthlyRevealButNotToSteam = false;
 
 						break;
-					case "HumbleBundleClaimTroveGames" when configValue.ValueKind == JsonValueKind.True:
-						config.ClaimTroveGames = true;
+					case "HumbleBundleClaimVaultGames" when configValue.ValueKind == JsonValueKind.True:
+						config.ClaimVaultGames = true;
 
 						break;
-					case "HumbleBundleClaimTroveGames" when configValue.ValueKind == JsonValueKind.False:
-						config.ClaimTroveGames = false;
+					case "HumbleBundleClaimVaultGames" when configValue.ValueKind == JsonValueKind.False:
+						config.ClaimVaultGames = false;
 
 						break;
 				}

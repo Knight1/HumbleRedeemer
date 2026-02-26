@@ -26,8 +26,8 @@ internal sealed class HumbleBundleBotCache : SerializableFile {
 	internal List<HumbleTpkInfo> CachedTpks { get; set; } = new();
 
 	[JsonInclude]
-	[JsonPropertyName("ClaimedTroveGames")]
-	internal List<string> ClaimedTroveGames { get; set; } = new();
+	[JsonPropertyName("ClaimedVaultGames")]
+	internal List<string> ClaimedVaultGames { get; set; } = new();
 
 	[JsonInclude]
 	[JsonPropertyName("LastAutoPayDate")]

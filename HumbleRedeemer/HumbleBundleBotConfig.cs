@@ -74,8 +74,8 @@ public sealed class HumbleBundleBotConfig {
 	public bool PayMonthlyRevealButNotToSteam { get; set; } = false;
 
 	[JsonInclude]
-	[JsonPropertyName("HumbleBundleClaimTroveGames")]
-	public bool ClaimTroveGames { get; set; } = false;
+	[JsonPropertyName("HumbleBundleClaimVaultGames")]
+	public bool ClaimVaultGames { get; set; } = false;
 
 	[JsonConstructor]
 	public HumbleBundleBotConfig() { }

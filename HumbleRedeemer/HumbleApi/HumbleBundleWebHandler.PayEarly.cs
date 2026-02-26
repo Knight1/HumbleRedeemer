@@ -206,6 +206,7 @@ internal sealed partial class HumbleBundleWebHandler {
 
 			bool success = false;
 			string? jobId = null;
+			string? reason = null;
 
 			foreach (JsonProperty prop in data.EnumerateObject()) {
 				switch (prop.Name) {
@@ -215,10 +216,18 @@ internal sealed partial class HumbleBundleWebHandler {
 					case "jobId" when prop.Value.ValueKind == JsonValueKind.String:
 						jobId = prop.Value.GetString();
 						break;
+					case "reason" when prop.Value.ValueKind == JsonValueKind.String:
+						reason = prop.Value.GetString();
+						break;
 				}
 			}
 
 			if (!success || string.IsNullOrEmpty(jobId)) {
+				if (string.Equals(reason, "Payment already in progress", StringComparison.OrdinalIgnoreCase)) {
+					ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Payment for this month is already in progress");
+					return string.Empty;
+				}
+
 				ASF.ArchiLogger.LogGenericWarning($"[{BotName}] Pay early failed or returned no jobId: {json[..Math.Min(200, json.Length)]}");
 				return null;
 			}

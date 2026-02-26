@@ -8,7 +8,7 @@ using ArchiSteamFarm.Helpers.Json;
 
 namespace HumbleRedeemer;
 
-internal sealed class TroveGameInfo {
+internal sealed class VaultGameInfo {
 	internal string GameMachineName { get; set; } = "";
 	internal string HumanName { get; set; } = "";
 	internal string DownloadMachineName { get; set; } = "";
@@ -17,26 +17,26 @@ internal sealed class TroveGameInfo {
 
 internal sealed partial class HumbleBundleWebHandler {
 	/// <summary>
-	/// Fetch all Trove games by iterating chunks until an empty response is returned.
-	/// Returns one TroveGameInfo per game (first available platform download).
+	/// Fetch all Humble Vault games by paginating the catalog endpoint until an empty page is returned.
+	/// Returns one VaultGameInfo per game (first available platform download).
 	/// </summary>
-	internal async Task<List<TroveGameInfo>?> GetAllTroveGamesAsync() {
+	internal async Task<List<VaultGameInfo>?> GetAllVaultGamesAsync() {
 		if (!IsLoggedIn) {
 			return null;
 		}
 
-		List<TroveGameInfo> result = new();
-		int chunkIndex = 0;
+		List<VaultGameInfo> result = new();
+		int pageIndex = 0;
 
 		try {
 			while (true) {
-				string url = $"/api/v1/trove/chunk?property=popularity&direction=desc&index={chunkIndex}";
+				string url = $"/client/catalog?property=start&direction=desc&index={pageIndex}";
 				using HttpRequestMessage request = new(HttpMethod.Get, url);
 				request.Headers.Add("X-Requested-With", "XMLHttpRequest");
 				HttpResponseMessage response = await HttpClient.SendAsync(request).ConfigureAwait(false);
 
 				if (!response.IsSuccessStatusCode) {
-					ASF.ArchiLogger.LogGenericError($"[{BotName}] Trove chunk {chunkIndex} request failed: {response.StatusCode}");
+					ASF.ArchiLogger.LogGenericError($"[{BotName}] Vault catalog page {pageIndex} request failed: {response.StatusCode}");
 					break;
 				}
 
@@ -46,11 +46,10 @@ internal sealed partial class HumbleBundleWebHandler {
 				try {
 					data = json.ToJsonObject<JsonElement>();
 				} catch (Exception ex) {
-					ASF.ArchiLogger.LogGenericException(ex, $"[{BotName}] Failed to parse Trove chunk {chunkIndex}");
+					ASF.ArchiLogger.LogGenericException(ex, $"[{BotName}] Failed to parse Vault catalog page {pageIndex}");
 					break;
 				}
 
-				// Empty array means no more chunks
 				if (data.ValueKind != JsonValueKind.Array) {
 					break;
 				}
@@ -110,7 +109,7 @@ internal sealed partial class HumbleBundleWebHandler {
 					}
 
 					if (!string.IsNullOrEmpty(gameMachineName) && !string.IsNullOrEmpty(downloadMachineName) && !string.IsNullOrEmpty(filename)) {
-						result.Add(new TroveGameInfo {
+						result.Add(new VaultGameInfo {
 							GameMachineName = gameMachineName,
 							HumanName = humanName,
 							DownloadMachineName = downloadMachineName,
@@ -119,52 +118,19 @@ internal sealed partial class HumbleBundleWebHandler {
 					}
 				}
 
-				// No new games parsed — stop iterating
+				// Empty page — no more games
 				if (result.Count == countBefore) {
 					break;
 				}
 
-				ASF.ArchiLogger.LogGenericDebug($"[{BotName}] Trove chunk {chunkIndex}: {result.Count - countBefore} games");
-				chunkIndex++;
+				ASF.ArchiLogger.LogGenericDebug($"[{BotName}] Vault catalog page {pageIndex}: {result.Count - countBefore} games");
+				pageIndex++;
 			}
 		} catch (Exception ex) {
-			ASF.ArchiLogger.LogGenericException(ex, $"[{BotName}] Failed to fetch Trove games");
+			ASF.ArchiLogger.LogGenericException(ex, $"[{BotName}] Failed to fetch Vault games");
 			return null;
 		}
 
 		return result;
-	}
-
-	/// <summary>
-	/// Register a Trove game download in the account by calling the sign URL endpoint.
-	/// This claims the game without downloading the file.
-	/// Returns true on success.
-	/// </summary>
-	internal async Task<bool> ClaimTroveGameAsync(string downloadMachineName, string filename) {
-		if (!IsLoggedIn) {
-			return false;
-		}
-
-		try {
-			string body = $"machine_name={Uri.EscapeDataString(downloadMachineName)}&filename={Uri.EscapeDataString(filename)}";
-
-			using HttpRequestMessage request = new(HttpMethod.Post, "/api/v1/user/download/sign") {
-				Content = new StringContent(body, System.Text.Encoding.UTF8, "application/x-www-form-urlencoded")
-			};
-
-			request.Headers.Add("X-Requested-With", "XMLHttpRequest");
-
-			HttpResponseMessage response = await HttpClient.SendAsync(request).ConfigureAwait(false);
-
-			if (!response.IsSuccessStatusCode) {
-				ASF.ArchiLogger.LogGenericDebug($"[{BotName}] Trove claim failed for '{downloadMachineName}': {response.StatusCode}");
-				return false;
-			}
-
-			return true;
-		} catch (Exception ex) {
-			ASF.ArchiLogger.LogGenericException(ex, $"[{BotName}] Error claiming Trove game '{downloadMachineName}'");
-			return false;
-		}
 	}
 }
