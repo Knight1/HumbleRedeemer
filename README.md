@@ -48,7 +48,10 @@ Add HumbleBundle settings directly to your bot's configuration file in `config/<
   "HumbleBundleBlacklistedAppIds": [],
   "HumbleBundleRedeemButNotToSteamAppIds": [],
   "HumbleBundleSkipUnknownAppIds": false,
-  "HumbleBundleIgnoreStoreLocationButRedeem": false
+  "HumbleBundleIgnoreStoreLocationButRedeem": false,
+  "HumbleBundleAutoPayMonthly": false,
+  "HumbleBundlePayMonthlyButNotReveal": false,
+  "HumbleBundlePayMonthlyRevealButNotToSteam": false
 }
 ```
 
@@ -68,6 +71,9 @@ Add HumbleBundle settings directly to your bot's configuration file in `config/<
 - `HumbleBundleRedeemButNotToSteamAppIds` - List of Steam App IDs to reveal keys for but not send to Steam. Example: `[730, 570]` (default: [])
 - `HumbleBundleSkipUnknownAppIds` - If `true`, skip redeeming keys that don't have a Steam App ID set (default: false)
 - `HumbleBundleIgnoreStoreLocationButRedeem` - If `true`, reveal keys ignoring region restrictions but don't send them to Steam (default: false)
+- `HumbleBundleAutoPayMonthly` - If `true`, automatically pay for the current Humble Choice month if it hasn't been paid yet (default: false)
+- `HumbleBundlePayMonthlyButNotReveal` - If `true` (requires `HumbleBundleAutoPayMonthly`), pay for the current month but do not reveal any keys (default: false)
+- `HumbleBundlePayMonthlyRevealButNotToSteam` - If `true` (requires `HumbleBundleAutoPayMonthly`), pay and reveal keys for the current month but do not send them to Steam (default: false)
 
 ---
 

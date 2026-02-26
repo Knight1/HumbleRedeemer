@@ -112,6 +112,9 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 	private static readonly ConcurrentDictionary<Bot, System.Threading.Timer> BotRedeemTimers = new();
 	private static readonly ConcurrentDictionary<Bot, HumbleBundleBotConfig> BotConfigs = new();
 
+	/// <summary>Game keys paid via AutoPayMonthly this session, used to control reveal behavior.</summary>
+	private static readonly ConcurrentDictionary<Bot, HashSet<string>> BotPaidGameKeys = new();
+
 	public Task OnLoaded() {
 		ASF.ArchiLogger.LogGenericInfo($"{Name} plugin loaded!");
 
@@ -173,6 +176,9 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 		} else {
 			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Restored HumbleBundle session from cache");
 		}
+
+		// Auto-pay current month before fetching orders so the new gamekey is in the list
+		await TryAutoPayCurrentMonthAsync(bot, webHandler, config).ConfigureAwait(false);
 
 		// Test API by fetching order keys
 		List<string>? orderKeys = await webHandler.GetOrderKeysAsync().ConfigureAwait(false);
@@ -262,6 +268,7 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 		BotComparisonDone.TryRemove(bot, out _);
 		BotConfigs.TryRemove(bot, out _);
 		BotCaches.TryRemove(bot, out _);
+		BotPaidGameKeys.TryRemove(bot, out _);
 	}
 
 	public Task OnBotSteamCallbacksInit(Bot bot, CallbackManager callbackManager) {
@@ -579,12 +586,15 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 		bool redeemOnlyWithExpiration = config?.RedeemOnlyWithExpiration ?? false;
 		bool skipUnknownAppIds = config?.SkipUnknownAppIds ?? false;
 		bool effectiveIgnoreLocation = ignoreStoreLocation || ignoreStoreLocationButRedeem;
+		bool payMonthlyButNotReveal = config?.PayMonthlyButNotReveal ?? false;
+		bool payMonthlyRevealButNotToSteam = config?.PayMonthlyRevealButNotToSteam ?? false;
 		HashSet<uint> blacklistedAppIds = config?.BlacklistedAppIds != null
 			? new HashSet<uint>(config.BlacklistedAppIds)
 			: new HashSet<uint>();
 		HashSet<uint> redeemButNotToSteamAppIds = config?.RedeemButNotToSteamAppIds != null
 			? new HashSet<uint>(config.RedeemButNotToSteamAppIds)
 			: new HashSet<uint>();
+		HashSet<string> paidGameKeys = BotPaidGameKeys.TryGetValue(bot, out HashSet<string>? pgk) ? pgk : new HashSet<string>();
 
 		// Collect eligible TPKs: unrevealed, not expired, not sold out, not already a gift, not country blocked
 		// If UseGiftLinkForOwned is true, also include games already owned (to redeem as gift links)
@@ -604,6 +614,11 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 
 			// Skip if current logic requires AppId but it's missing
 			if (tpk.SteamAppId == 0) {
+				continue;
+			}
+
+			// Skip if this came from an auto-paid month and reveal is disabled
+			if (payMonthlyButNotReveal && paidGameKeys.Contains(tpk.GameKey)) {
 				continue;
 			}
 
@@ -630,11 +645,13 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 
 			// Redeem as gift if already owned and UseGiftLinkForOwned is enabled
 			bool redeemAsGift = isOwned && useGiftLinkForOwned;
-			// Mark as "not for Steam" if AppId is in the list, or if the key only passed the
-			// country check because IgnoreStoreLocationButRedeem is enabled
+			// Mark as "not for Steam" if: AppId is in the list, key only passed country check
+			// because IgnoreStoreLocationButRedeem is enabled, or it's from an auto-paid month
+			// with PayMonthlyRevealButNotToSteam enabled.
 			bool isRegionRestricted = !IsCountryAllowed(tpk, countryCode);
 			bool skipSteam = redeemButNotToSteamAppIds.Contains(tpk.SteamAppId)
-				|| (ignoreStoreLocationButRedeem && isRegionRestricted);
+				|| (ignoreStoreLocationButRedeem && isRegionRestricted)
+				|| (payMonthlyRevealButNotToSteam && paidGameKeys.Contains(tpk.GameKey));
 			toRedeem.Add((tpk, redeemAsGift, skipSteam));
 		}
 
@@ -709,12 +726,26 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 
 		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] === Processing {choiceOrders.Count} Humble Choice Orders ===");
 
+		BotConfigs.TryGetValue(bot, out HumbleBundleBotConfig? choiceConfig);
+		bool payMonthlyButNotReveal = choiceConfig?.PayMonthlyButNotReveal ?? false;
+		bool payMonthlyRevealButNotToSteam = choiceConfig?.PayMonthlyRevealButNotToSteam ?? false;
+		HashSet<string> paidChoiceKeys = BotPaidGameKeys.TryGetValue(bot, out HashSet<string>? cpgk) ? cpgk : new HashSet<string>();
+
 		int totalRedeemed = 0;
 		int totalFailed = 0;
 		int totalSkipped = 0;
 
 		foreach (ChoiceOrderInfo choiceOrder in choiceOrders) {
 			try {
+				bool isPaidOrder = paidChoiceKeys.Contains(choiceOrder.GameKey);
+
+				if (isPaidOrder && payMonthlyButNotReveal) {
+					ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] PAID (not revealing): '{choiceOrder.HumanName}' - key reveal skipped by config");
+					continue;
+				}
+
+				bool revealButNotToSteam = isPaidOrder && payMonthlyRevealButNotToSteam;
+
 				List<ChoiceRedemptionResult> results = await webHandler.ProcessChoiceOrderAsync(
 					choiceOrder.GameKey,
 					choiceOrder.ChoiceUrl,
@@ -751,7 +782,12 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 							humbleTpks.Add(tpk);
 						}
 
-						ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] CHOICE REDEEMED: '{result.GameName}' from {result.ChoiceTitle} => {result.Key}");
+						if (revealButNotToSteam) {
+							ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] CHOICE REVEALED (not for Steam): '{result.GameName}' from {result.ChoiceTitle} => {result.Key}");
+						} else {
+							ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] CHOICE REDEEMED: '{result.GameName}' from {result.ChoiceTitle} => {result.Key}");
+						}
+
 						totalRedeemed++;
 					} else if (!string.IsNullOrEmpty(result.Error)) {
 						if (result.Error == "Expired" || result.Error == "Sold out") {
@@ -807,6 +843,49 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 
 		BotRedeemTimers[bot] = timer;
 		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Redeem retry timer started (interval: {intervalMinutes} minutes)");
+	}
+
+	/// <summary>
+	/// If AutoPayMonthly is enabled, find and pay for the current unpaid Humble Choice month.
+	/// Stores the resulting gamekey in BotPaidGameKeys so downstream processing can apply
+	/// PayMonthlyButNotReveal / PayMonthlyRevealButNotToSteam config flags.
+	/// </summary>
+	private static async Task TryAutoPayCurrentMonthAsync(Bot bot, HumbleBundleWebHandler webHandler, HumbleBundleBotConfig config) {
+		if (!config.AutoPayMonthly) {
+			return;
+		}
+
+		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Checking for unpaid Humble Choice month...");
+
+		UnpaidMonthInfo? unpaidMonth = await webHandler.GetCurrentUnpaidMonthAsync().ConfigureAwait(false);
+
+		if (unpaidMonth == null) {
+			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] No unpaid month found (or not a subscriber)");
+			return;
+		}
+
+		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Found unpaid month: {unpaidMonth.HumanName} ({unpaidMonth.MachineName})");
+
+		string? jobId = await webHandler.PayEarlyAsync(unpaidMonth.MachineName, unpaidMonth.ChoiceUrl).ConfigureAwait(false);
+
+		if (string.IsNullOrEmpty(jobId)) {
+			ASF.ArchiLogger.LogGenericError($"[{bot.BotName}] Failed to initiate payment for {unpaidMonth.HumanName}");
+			return;
+		}
+
+		string? gameKey = await webHandler.PollPayEarlyStatusAsync(jobId).ConfigureAwait(false);
+
+		if (string.IsNullOrEmpty(gameKey)) {
+			ASF.ArchiLogger.LogGenericError($"[{bot.BotName}] Payment for {unpaidMonth.HumanName} did not complete");
+			return;
+		}
+
+		string mode = config.PayMonthlyButNotReveal ? "not revealing keys" :
+			config.PayMonthlyRevealButNotToSteam ? "revealing keys (not for Steam)" : "revealing keys";
+
+		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Successfully paid for {unpaidMonth.HumanName} ({mode}), gamekey: {gameKey}");
+
+		BotPaidGameKeys[bot] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { gameKey };
 	}
 
 	private static async Task RetryRedeemAvailableKeys(Bot bot) {
@@ -1225,6 +1304,30 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 						break;
 					case "HumbleBundleIgnoreStoreLocationButRedeem" when configValue.ValueKind == JsonValueKind.False:
 						config.IgnoreStoreLocationButRedeem = false;
+
+						break;
+					case "HumbleBundleAutoPayMonthly" when configValue.ValueKind == JsonValueKind.True:
+						config.AutoPayMonthly = true;
+
+						break;
+					case "HumbleBundleAutoPayMonthly" when configValue.ValueKind == JsonValueKind.False:
+						config.AutoPayMonthly = false;
+
+						break;
+					case "HumbleBundlePayMonthlyButNotReveal" when configValue.ValueKind == JsonValueKind.True:
+						config.PayMonthlyButNotReveal = true;
+
+						break;
+					case "HumbleBundlePayMonthlyButNotReveal" when configValue.ValueKind == JsonValueKind.False:
+						config.PayMonthlyButNotReveal = false;
+
+						break;
+					case "HumbleBundlePayMonthlyRevealButNotToSteam" when configValue.ValueKind == JsonValueKind.True:
+						config.PayMonthlyRevealButNotToSteam = true;
+
+						break;
+					case "HumbleBundlePayMonthlyRevealButNotToSteam" when configValue.ValueKind == JsonValueKind.False:
+						config.PayMonthlyRevealButNotToSteam = false;
 
 						break;
 				}

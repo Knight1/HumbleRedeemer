@@ -61,6 +61,18 @@ public sealed class HumbleBundleBotConfig {
 	[JsonPropertyName("HumbleBundleIgnoreStoreLocationButRedeem")]
 	public bool IgnoreStoreLocationButRedeem { get; set; } = false;
 
+	[JsonInclude]
+	[JsonPropertyName("HumbleBundleAutoPayMonthly")]
+	public bool AutoPayMonthly { get; set; } = false;
+
+	[JsonInclude]
+	[JsonPropertyName("HumbleBundlePayMonthlyButNotReveal")]
+	public bool PayMonthlyButNotReveal { get; set; } = false;
+
+	[JsonInclude]
+	[JsonPropertyName("HumbleBundlePayMonthlyRevealButNotToSteam")]
+	public bool PayMonthlyRevealButNotToSteam { get; set; } = false;
+
 	[JsonConstructor]
 	public HumbleBundleBotConfig() { }
 }
