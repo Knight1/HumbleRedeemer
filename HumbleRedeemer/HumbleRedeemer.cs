@@ -332,6 +332,10 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 			return;
 		}
 
+		if (!BotConfigs.ContainsKey(bot)) {
+			return;
+		}
+
 		// Store IP country code as fallback
 		if (!string.IsNullOrEmpty(callback.IPCountryCode)) {
 			BotCountryCodes[bot] = callback.IPCountryCode;
@@ -343,6 +347,10 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 	}
 
 	private static async Task FetchStoreCountry(Bot bot) {
+		if (!BotConfigs.ContainsKey(bot)) {
+			return;
+		}
+
 		try {
 			SteamUnifiedMessages? unifiedMessages = bot.GetHandler<SteamUnifiedMessages>();
 
@@ -414,6 +422,10 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 	}
 
 	private static async Task CompareHumbleBundleWithSteamLibrary(Bot bot) {
+		if (!BotConfigs.ContainsKey(bot)) {
+			return;
+		}
+
 		// Only run comparison once per session
 		if (!BotComparisonDone.TryAdd(bot, true)) {
 			return;
