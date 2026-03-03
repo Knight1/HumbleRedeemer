@@ -33,7 +33,7 @@ internal sealed partial class HumbleBundleWebHandler {
 		}
 
 		// Cloudflare rate-limit (429) confirmed via the cf-ray response header
-		if (response.StatusCode == HttpStatusCode.TooManyRequests && response.Headers.Contains("cf-ray")) {
+		if (response.StatusCode == HttpStatusCode.TooManyRequests && response.Headers.TryGetValues("cf-ray", out _)) {
 			return true;
 		}
 
