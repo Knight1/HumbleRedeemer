@@ -898,7 +898,7 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Found {vaultGames.Count} Vault games, {alreadyClaimed.Count} already claimed");
 
 		foreach (VaultGameInfo game in vaultGames) {
-			if (alreadyClaimed.Contains(game.GameMachineName)) {
+			if (alreadyClaimed.Contains(game.DownloadMachineName)) {
 				skipped++;
 				continue;
 			}
@@ -906,13 +906,13 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 			bool success = await webHandler.ClaimVaultGameAsync(game.DownloadMachineName, game.Filename).ConfigureAwait(false);
 
 			if (success) {
-				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Claimed Vault game: {game.HumanName} ({game.GameMachineName})");
-				botCache.ClaimedVaultGames.Add(game.GameMachineName);
-				alreadyClaimed.Add(game.GameMachineName);
+				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Claimed Vault game: {game.HumanName} ({game.GameMachineName}) [{game.Platform}]");
+				botCache.ClaimedVaultGames.Add(game.DownloadMachineName);
+				alreadyClaimed.Add(game.DownloadMachineName);
 				newlyClaimed++;
 				cacheUpdated = true;
 			} else {
-				ASF.ArchiLogger.LogGenericWarning($"[{bot.BotName}] Failed to claim Vault game: {game.HumanName} ({game.GameMachineName})");
+				ASF.ArchiLogger.LogGenericWarning($"[{bot.BotName}] Failed to claim Vault game: {game.HumanName} ({game.GameMachineName}) [{game.Platform}]");
 			}
 
 			// Small delay to avoid rate limiting

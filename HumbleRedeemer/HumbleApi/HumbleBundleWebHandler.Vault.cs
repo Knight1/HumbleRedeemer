@@ -13,12 +13,13 @@ internal sealed class VaultGameInfo {
 	internal string HumanName { get; set; } = "";
 	internal string DownloadMachineName { get; set; } = "";
 	internal string Filename { get; set; } = "";
+	internal string Platform { get; set; } = "";
 }
 
 internal sealed partial class HumbleBundleWebHandler {
 	/// <summary>
 	/// Fetch all Humble Vault games by paginating the catalog endpoint until an empty page is returned.
-	/// Returns one VaultGameInfo per game (first available platform download).
+	/// Returns one VaultGameInfo per game per platform (windows, mac, linux).
 	/// </summary>
 	internal async Task<List<VaultGameInfo>?> GetAllVaultGamesAsync() {
 		if (!IsLoggedIn) {
@@ -31,9 +32,11 @@ internal sealed partial class HumbleBundleWebHandler {
 		try {
 			while (true) {
 				string url = $"/client/catalog?property=start&direction=desc&index={pageIndex}";
-				using HttpRequestMessage request = new(HttpMethod.Get, url);
-				request.Headers.Add("X-Requested-With", "XMLHttpRequest");
-				HttpResponseMessage response = await HttpClient.SendAsync(request).ConfigureAwait(false);
+				HttpResponseMessage response = await SendAsync(() => {
+					HttpRequestMessage req = new(HttpMethod.Get, url);
+					req.Headers.Add("X-Requested-With", "XMLHttpRequest");
+					return req;
+				}).ConfigureAwait(false);
 
 				if (!response.IsSuccessStatusCode) {
 					ASF.ArchiLogger.LogGenericError($"[{BotName}] Vault catalog page {pageIndex} request failed: {response.StatusCode}");
@@ -63,8 +66,7 @@ internal sealed partial class HumbleBundleWebHandler {
 
 					string gameMachineName = "";
 					string humanName = "";
-					string downloadMachineName = "";
-					string filename = "";
+					List<(string Platform, string DownloadMachineName, string Filename)> platformDownloads = new();
 
 					foreach (JsonProperty prop in game.EnumerateObject()) {
 						switch (prop.Name) {
@@ -75,22 +77,25 @@ internal sealed partial class HumbleBundleWebHandler {
 								humanName = prop.Value.GetString() ?? "";
 								break;
 							case "downloads" when prop.Value.ValueKind == JsonValueKind.Object:
-								// Pick the first available platform download
+								// Collect all available platform downloads (windows, mac, linux)
 								foreach (JsonProperty platform in prop.Value.EnumerateObject()) {
 									if (platform.Value.ValueKind != JsonValueKind.Object) {
 										continue;
 									}
 
+									string platDownloadMachineName = "";
+									string platFilename = "";
+
 									foreach (JsonProperty dlProp in platform.Value.EnumerateObject()) {
 										switch (dlProp.Name) {
 											case "machine_name" when dlProp.Value.ValueKind == JsonValueKind.String:
-												downloadMachineName = dlProp.Value.GetString() ?? "";
+												platDownloadMachineName = dlProp.Value.GetString() ?? "";
 												break;
 											case "url" when dlProp.Value.ValueKind == JsonValueKind.Object:
 												foreach (JsonProperty urlProp in dlProp.Value.EnumerateObject()) {
 													if (urlProp.Name.Equals("web", StringComparison.OrdinalIgnoreCase) &&
 													    urlProp.Value.ValueKind == JsonValueKind.String) {
-														filename = urlProp.Value.GetString() ?? "";
+														platFilename = urlProp.Value.GetString() ?? "";
 													}
 												}
 
@@ -98,9 +103,8 @@ internal sealed partial class HumbleBundleWebHandler {
 										}
 									}
 
-									// Stop after the first platform that has both fields
-									if (!string.IsNullOrEmpty(downloadMachineName) && !string.IsNullOrEmpty(filename)) {
-										break;
+									if (!string.IsNullOrEmpty(platDownloadMachineName) && !string.IsNullOrEmpty(platFilename)) {
+										platformDownloads.Add((platform.Name, platDownloadMachineName, platFilename));
 									}
 								}
 
@@ -108,13 +112,16 @@ internal sealed partial class HumbleBundleWebHandler {
 						}
 					}
 
-					if (!string.IsNullOrEmpty(gameMachineName) && !string.IsNullOrEmpty(downloadMachineName) && !string.IsNullOrEmpty(filename)) {
-						result.Add(new VaultGameInfo {
-							GameMachineName = gameMachineName,
-							HumanName = humanName,
-							DownloadMachineName = downloadMachineName,
-							Filename = filename
-						});
+					if (!string.IsNullOrEmpty(gameMachineName)) {
+						foreach ((string platform, string dlMachineName, string dlFilename) in platformDownloads) {
+							result.Add(new VaultGameInfo {
+								GameMachineName = gameMachineName,
+								HumanName = humanName,
+								DownloadMachineName = dlMachineName,
+								Filename = dlFilename,
+								Platform = platform
+							});
+						}
 					}
 				}
 
@@ -123,7 +130,7 @@ internal sealed partial class HumbleBundleWebHandler {
 					break;
 				}
 
-				ASF.ArchiLogger.LogGenericDebug($"[{BotName}] Vault catalog page {pageIndex}: {result.Count - countBefore} games");
+				ASF.ArchiLogger.LogGenericDebug($"[{BotName}] Vault catalog page {pageIndex}: {result.Count - countBefore} platform downloads");
 				pageIndex++;
 			}
 		} catch (Exception ex) {

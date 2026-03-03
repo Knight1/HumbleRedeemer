@@ -19,13 +19,14 @@ internal sealed partial class HumbleBundleWebHandler {
 		try {
 			string body = $"machine_name={Uri.EscapeDataString(downloadMachineName)}&filename={Uri.EscapeDataString(filename)}";
 
-			using HttpRequestMessage request = new(HttpMethod.Post, "/api/v1/user/download/sign") {
-				Content = new StringContent(body, System.Text.Encoding.UTF8, "application/x-www-form-urlencoded")
-			};
+			HttpResponseMessage response = await SendAsync(() => {
+				HttpRequestMessage req = new(HttpMethod.Post, "/api/v1/user/download/sign") {
+					Content = new StringContent(body, System.Text.Encoding.UTF8, "application/x-www-form-urlencoded")
+				};
 
-			request.Headers.Add("X-Requested-With", "XMLHttpRequest");
-
-			HttpResponseMessage response = await HttpClient.SendAsync(request).ConfigureAwait(false);
+				req.Headers.Add("X-Requested-With", "XMLHttpRequest");
+				return req;
+			}).ConfigureAwait(false);
 
 			if (!response.IsSuccessStatusCode) {
 				ASF.ArchiLogger.LogGenericDebug($"[{BotName}] Vault claim failed for '{downloadMachineName}': {response.StatusCode}");

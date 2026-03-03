@@ -62,8 +62,7 @@ internal sealed partial class HumbleBundleWebHandler {
 		}
 
 		try {
-			using HttpRequestMessage request = new(HttpMethod.Get, $"/membership/{choiceUrl}");
-			HttpResponseMessage response = await HttpClient.SendAsync(request).ConfigureAwait(false);
+			HttpResponseMessage response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, $"/membership/{choiceUrl}")).ConfigureAwait(false);
 
 			if (!response.IsSuccessStatusCode) {
 				ASF.ArchiLogger.LogGenericError($"[{BotName}] Failed to fetch choice page for '{choiceUrl}': {response.StatusCode}");
@@ -295,28 +294,27 @@ internal sealed partial class HumbleBundleWebHandler {
 				body += $"&chosen_identifiers[]={Uri.EscapeDataString(id)}";
 			}
 
-			using HttpRequestMessage request = new(HttpMethod.Post, "/humbler/choosecontent") {
-				Content = new StringContent(body, System.Text.Encoding.UTF8, "application/x-www-form-urlencoded")
-			};
-
-			// Add required headers
-			request.Headers.Add("Referer", $"{BaseUrl}/home/library");
-			request.Headers.Add("Origin", BaseUrl);
-
-			// Add CSRF prevention token
 			Uri baseUri = new(BaseUrl);
-			CookieCollection cookies = CookieContainer.GetCookies(baseUri);
-
-			foreach (Cookie cookie in cookies) {
-				if (cookie.Name.Equals("csrf_cookie", StringComparison.OrdinalIgnoreCase)) {
-					request.Headers.Add("csrf-prevention-token", cookie.Value);
-					break;
-				}
-			}
 
 			ASF.ArchiLogger.LogGenericDebug($"[{BotName}] Choosing content: gamekey={gameKey}, parent={parentIdentifier}, identifiers={string.Join(", ", identifiers)}");
 
-			HttpResponseMessage response = await HttpClient.SendAsync(request).ConfigureAwait(false);
+			HttpResponseMessage response = await SendAsync(() => {
+				HttpRequestMessage req = new(HttpMethod.Post, "/humbler/choosecontent") {
+					Content = new StringContent(body, System.Text.Encoding.UTF8, "application/x-www-form-urlencoded")
+				};
+
+				req.Headers.Add("Referer", $"{BaseUrl}/home/library");
+				req.Headers.Add("Origin", BaseUrl);
+
+				foreach (Cookie cookie in CookieContainer.GetCookies(baseUri)) {
+					if (cookie.Name.Equals("csrf_cookie", StringComparison.OrdinalIgnoreCase)) {
+						req.Headers.Add("csrf-prevention-token", cookie.Value);
+						break;
+					}
+				}
+
+				return req;
+			}).ConfigureAwait(false);
 
 			if (!response.IsSuccessStatusCode) {
 				string errorBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);

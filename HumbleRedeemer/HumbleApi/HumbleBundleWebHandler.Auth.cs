@@ -120,8 +120,7 @@ internal sealed partial class HumbleBundleWebHandler {
 			ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Attempting to login to HumbleBundle...");
 
 			// Step 1: Get login page to extract CSRF token
-			using HttpRequestMessage loginPageRequest = new(HttpMethod.Get, "/login");
-			HttpResponseMessage loginPageResponse = await HttpClient.SendAsync(loginPageRequest).ConfigureAwait(false);
+			HttpResponseMessage loginPageResponse = await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, "/login")).ConfigureAwait(false);
 
 			ASF.ArchiLogger.LogGenericDebug($"[{BotName}] Login page response: {loginPageResponse.StatusCode} from {loginPageResponse.RequestMessage?.RequestUri}");
 
@@ -179,32 +178,35 @@ internal sealed partial class HumbleBundleWebHandler {
 				{ "goto", "/" }
 			};
 
-			using HttpRequestMessage loginRequest = new(HttpMethod.Post, "/processlogin") {
-				Content = new FormUrlEncodedContent(loginData)
-			};
+			ASF.ArchiLogger.LogGenericDebug($"[{BotName}] Submitting login with username: {username}");
 
-			// Add required headers
-			loginRequest.Headers.Add("Referer", $"{BaseUrl}/login");
-			loginRequest.Headers.Add("Origin", BaseUrl);
-
-			// Add CSRF prevention token header if csrf_cookie exists
 			if (csrfCookie != null) {
-				loginRequest.Headers.Add("csrf-prevention-token", csrfCookie.Value);
 				ASF.ArchiLogger.LogGenericDebug($"[{BotName}] Added csrf-prevention-token header: {csrfCookie.Value}");
 			}
 
-			ASF.ArchiLogger.LogGenericDebug($"[{BotName}] Submitting login with username: {username}");
+			HttpResponseMessage loginResponse = await SendAsync(() => {
+				HttpRequestMessage req = new(HttpMethod.Post, "/processlogin") {
+					Content = new FormUrlEncodedContent(loginData)
+				};
 
-			HttpResponseMessage loginResponse = await HttpClient.SendAsync(loginRequest).ConfigureAwait(false);
+				req.Headers.Add("Referer", $"{BaseUrl}/login");
+				req.Headers.Add("Origin", BaseUrl);
+
+				if (csrfCookie != null) {
+					req.Headers.Add("csrf-prevention-token", csrfCookie.Value);
+				}
+
+				return req;
+			}).ConfigureAwait(false);
 
 			ASF.ArchiLogger.LogGenericDebug($"[{BotName}] Login response status: {loginResponse.StatusCode}");
 
 			string loginResponseText = await loginResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
 
 			// Check if 2FA is required (can be 401 Unauthorized or 200 OK with 2FA prompt)
-			if (loginResponseText.Contains("two_factor_required", StringComparison.OrdinalIgnoreCase) ||
-			    loginResponseText.Contains("humbleguard", StringComparison.OrdinalIgnoreCase) ||
-			    loginResponseText.Contains("authy-input", StringComparison.OrdinalIgnoreCase)) {
+			if (loginResponseText.Contains("two_factor_required", StringComparison.OrdinalIgnoreCase)
+				|| loginResponseText.Contains("humbleguard", StringComparison.OrdinalIgnoreCase)
+				|| loginResponseText.Contains("authy-input", StringComparison.OrdinalIgnoreCase)) {
 
 				// Try to extract 2FA type from response using regex
 				string twoFactorType = "unknown";
@@ -255,44 +257,27 @@ internal sealed partial class HumbleBundleWebHandler {
 					{ "code", twoFactorCode }
 				};
 
-			// Retry 2FA submission for up to 30 seconds (Authy codes are only valid for ~30s and Cloudflare may transiently block)
-				DateTime twoFactorDeadline = DateTime.UtcNow.AddSeconds(30);
-				bool twoFactorSuccess = false;
-
-				while (DateTime.UtcNow < twoFactorDeadline) {
-					using HttpRequestMessage twoFactorRequest = new(HttpMethod.Post, "/processlogin") {
+				HttpResponseMessage twoFactorResponse = await SendAsync(() => {
+					HttpRequestMessage req = new(HttpMethod.Post, "/processlogin") {
 						Content = new FormUrlEncodedContent(twoFactorLoginData)
 					};
 
-					twoFactorRequest.Headers.Add("Referer", $"{BaseUrl}/login");
-					twoFactorRequest.Headers.Add("Origin", BaseUrl);
+					req.Headers.Add("Referer", $"{BaseUrl}/login");
+					req.Headers.Add("Origin", BaseUrl);
+
 					if (csrfCookie != null) {
-						twoFactorRequest.Headers.Add("csrf-prevention-token", csrfCookie.Value);
+						req.Headers.Add("csrf-prevention-token", csrfCookie.Value);
 					}
 
-					HttpResponseMessage twoFactorResponse = await HttpClient.SendAsync(twoFactorRequest).ConfigureAwait(false);
+					return req;
+				}).ConfigureAwait(false);
 
-					string twoFactorResponseText = await twoFactorResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
-					ASF.ArchiLogger.LogGenericDebug($"[{BotName}] 2FA response status: {twoFactorResponse.StatusCode}");
-					ASF.ArchiLogger.LogGenericDebug($"[{BotName}] 2FA response: {twoFactorResponseText[..Math.Min(500, twoFactorResponseText.Length)]}");
+				string twoFactorResponseText = await twoFactorResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
+				ASF.ArchiLogger.LogGenericDebug($"[{BotName}] 2FA response status: {twoFactorResponse.StatusCode}");
+				ASF.ArchiLogger.LogGenericDebug($"[{BotName}] 2FA response: {twoFactorResponseText[..Math.Min(500, twoFactorResponseText.Length)]}");
 
-					if (twoFactorResponse.IsSuccessStatusCode) {
-						twoFactorSuccess = true;
-						break;
-					}
-
-					TimeSpan remaining = twoFactorDeadline - DateTime.UtcNow;
-					if (remaining <= TimeSpan.Zero) {
-						ASF.ArchiLogger.LogGenericError($"[{BotName}] Two-factor authentication failed: {twoFactorResponse.StatusCode}");
-						return false;
-					}
-
-					ASF.ArchiLogger.LogGenericWarning($"[{BotName}] Two-factor authentication attempt failed ({twoFactorResponse.StatusCode}), retrying... ({remaining.TotalSeconds:F0}s remaining)");
-					await Task.Delay(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
-				}
-
-				if (!twoFactorSuccess) {
-					ASF.ArchiLogger.LogGenericError($"[{BotName}] Two-factor authentication failed after retrying for 30 seconds");
+				if (!twoFactorResponse.IsSuccessStatusCode) {
+					ASF.ArchiLogger.LogGenericError($"[{BotName}] Two-factor authentication failed: {twoFactorResponse.StatusCode}");
 					return false;
 				}
 
@@ -329,8 +314,7 @@ internal sealed partial class HumbleBundleWebHandler {
 	private async Task<bool> VerifySessionAsync() {
 		try {
 			// Use the user/order API to verify the session
-			using HttpRequestMessage request = new(HttpMethod.Get, "/api/v1/user/order");
-			HttpResponseMessage response = await HttpClient.SendAsync(request).ConfigureAwait(false);
+			HttpResponseMessage response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, "/api/v1/user/order")).ConfigureAwait(false);
 
 			// If we're redirected to login page, session is invalid
 			if (response.RequestMessage?.RequestUri?.AbsolutePath.Contains("/login", StringComparison.OrdinalIgnoreCase) == true) {

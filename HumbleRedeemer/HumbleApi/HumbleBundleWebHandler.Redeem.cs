@@ -28,28 +28,27 @@ internal sealed partial class HumbleBundleWebHandler {
 				body += "&gift=true";
 			}
 
-			using HttpRequestMessage request = new(HttpMethod.Post, "/humbler/redeemkey") {
-				Content = new StringContent(body, System.Text.Encoding.UTF8, "application/x-www-form-urlencoded")
-			};
-
-			// Add required headers
-			request.Headers.Add("Referer", $"{BaseUrl}/home/library");
-			request.Headers.Add("Origin", BaseUrl);
-
-			// Add CSRF prevention token from csrf_cookie if available
 			Uri baseUri = new(BaseUrl);
-			CookieCollection cookies = CookieContainer.GetCookies(baseUri);
-
-			foreach (Cookie cookie in cookies) {
-				if (cookie.Name.Equals("csrf_cookie", StringComparison.OrdinalIgnoreCase)) {
-					request.Headers.Add("csrf-prevention-token", cookie.Value);
-					break;
-				}
-			}
 
 			ASF.ArchiLogger.LogGenericDebug($"[{BotName}] Redeeming key: machineName={machineName}, gameKey={gameKey}, keyIndex={keyIndex}, gift={gift}");
 
-			HttpResponseMessage response = await HttpClient.SendAsync(request).ConfigureAwait(false);
+			HttpResponseMessage response = await SendAsync(() => {
+				HttpRequestMessage req = new(HttpMethod.Post, "/humbler/redeemkey") {
+					Content = new StringContent(body, System.Text.Encoding.UTF8, "application/x-www-form-urlencoded")
+				};
+
+				req.Headers.Add("Referer", $"{BaseUrl}/home/library");
+				req.Headers.Add("Origin", BaseUrl);
+
+				foreach (Cookie cookie in CookieContainer.GetCookies(baseUri)) {
+					if (cookie.Name.Equals("csrf_cookie", StringComparison.OrdinalIgnoreCase)) {
+						req.Headers.Add("csrf-prevention-token", cookie.Value);
+						break;
+					}
+				}
+
+				return req;
+			}).ConfigureAwait(false);
 
 			if (!response.IsSuccessStatusCode) {
 				string errorBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);

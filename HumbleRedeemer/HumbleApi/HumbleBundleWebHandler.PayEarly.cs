@@ -39,8 +39,7 @@ internal sealed partial class HumbleBundleWebHandler {
 		try {
 			// The subscription products API only lists paid months with their gamekeys.
 			// If the current month already appears with a gamekey, it is already paid.
-			using HttpRequestMessage request = new(HttpMethod.Get, "/api/v1/subscriptions/humble_monthly/subscription_products_with_gamekeys/");
-			HttpResponseMessage response = await HttpClient.SendAsync(request).ConfigureAwait(false);
+			HttpResponseMessage response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, "/api/v1/subscriptions/humble_monthly/subscription_products_with_gamekeys/")).ConfigureAwait(false);
 
 			if (response.IsSuccessStatusCode) {
 				string json = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
@@ -154,8 +153,7 @@ internal sealed partial class HumbleBundleWebHandler {
 
 			if (!hasCsrfCookie) {
 				ASF.ArchiLogger.LogGenericDebug($"[{BotName}] csrf_cookie not found, fetching /membership to obtain one");
-				using HttpRequestMessage pageRequest = new(HttpMethod.Get, $"/membership/{choiceUrl}");
-				await HttpClient.SendAsync(pageRequest).ConfigureAwait(false);
+				await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, $"/membership/{choiceUrl}")).ConfigureAwait(false);
 			}
 
 			// Read CSRF token from the csrf_cookie
@@ -171,17 +169,18 @@ internal sealed partial class HumbleBundleWebHandler {
 			// payearly requires _le_csrf_token in the form body (unlike redeemkey which uses a header)
 			string body = $"_le_csrf_token={Uri.EscapeDataString(csrfToken)}&product={Uri.EscapeDataString(product)}";
 
-			using HttpRequestMessage request = new(HttpMethod.Post, "/membership/payearly") {
-				Content = new StringContent(body, System.Text.Encoding.UTF8, "application/x-www-form-urlencoded")
-			};
-
-			request.Headers.Add("Referer", $"{BaseUrl}/membership/{choiceUrl}");
-			request.Headers.Add("Origin", BaseUrl);
-			request.Headers.Add("X-Requested-With", "XMLHttpRequest");
-
 			ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Initiating early payment for product: {product}");
 
-			HttpResponseMessage response = await HttpClient.SendAsync(request).ConfigureAwait(false);
+			HttpResponseMessage response = await SendAsync(() => {
+				HttpRequestMessage req = new(HttpMethod.Post, "/membership/payearly") {
+					Content = new StringContent(body, System.Text.Encoding.UTF8, "application/x-www-form-urlencoded")
+				};
+
+				req.Headers.Add("Referer", $"{BaseUrl}/membership/{choiceUrl}");
+				req.Headers.Add("Origin", BaseUrl);
+				req.Headers.Add("X-Requested-With", "XMLHttpRequest");
+				return req;
+			}).ConfigureAwait(false);
 
 			if (!response.IsSuccessStatusCode) {
 				ASF.ArchiLogger.LogGenericError($"[{BotName}] Pay early request failed: {response.StatusCode}");
@@ -250,9 +249,11 @@ internal sealed partial class HumbleBundleWebHandler {
 			await Task.Delay(attempt * 1000).ConfigureAwait(false);
 
 			try {
-				using HttpRequestMessage request = new(HttpMethod.Get, $"/membership/payearlystatus/{jobId}");
-				request.Headers.Add("X-Requested-With", "XMLHttpRequest");
-				HttpResponseMessage response = await HttpClient.SendAsync(request).ConfigureAwait(false);
+				HttpResponseMessage response = await SendAsync(() => {
+					HttpRequestMessage req = new(HttpMethod.Get, $"/membership/payearlystatus/{jobId}");
+					req.Headers.Add("X-Requested-With", "XMLHttpRequest");
+					return req;
+				}).ConfigureAwait(false);
 
 				if (!response.IsSuccessStatusCode) {
 					ASF.ArchiLogger.LogGenericDebug($"[{BotName}] Pay early status check returned: {response.StatusCode}");

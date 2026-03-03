@@ -22,8 +22,7 @@ internal sealed partial class HumbleBundleWebHandler {
 		}
 
 		try {
-			using HttpRequestMessage request = new(HttpMethod.Get, "/api/v1/user/order");
-			HttpResponseMessage response = await HttpClient.SendAsync(request).ConfigureAwait(false);
+			HttpResponseMessage response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, "/api/v1/user/order")).ConfigureAwait(false);
 
 			if (!response.IsSuccessStatusCode) {
 				ASF.ArchiLogger.LogGenericError($"[{BotName}] Failed to fetch user orders: {response.StatusCode}");
@@ -90,8 +89,7 @@ internal sealed partial class HumbleBundleWebHandler {
 		}
 
 		try {
-			using HttpRequestMessage request = new(HttpMethod.Get, $"/api/v1/order/{gameKey}?all_tpkds=true");
-			HttpResponseMessage response = await HttpClient.SendAsync(request).ConfigureAwait(false);
+			HttpResponseMessage response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, $"/api/v1/order/{gameKey}?all_tpkds=true")).ConfigureAwait(false);
 
 			if (!response.IsSuccessStatusCode) {
 				ASF.ArchiLogger.LogGenericError($"[{BotName}] Failed to fetch order details for {gameKey}: {response.StatusCode}");
@@ -239,8 +237,7 @@ internal sealed partial class HumbleBundleWebHandler {
 				string queryString = "all_tpkds=true&" + string.Join("&", batch.Select(key => $"gamekeys={Uri.EscapeDataString(key)}"));
 				string requestUrl = $"/api/v1/orders?{queryString}";
 
-				using HttpRequestMessage request = new(HttpMethod.Get, requestUrl);
-				HttpResponseMessage response = await HttpClient.SendAsync(request).ConfigureAwait(false);
+				HttpResponseMessage response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, requestUrl)).ConfigureAwait(false);
 
 				if (!response.IsSuccessStatusCode) {
 					ASF.ArchiLogger.LogGenericError($"[{BotName}] Failed to fetch orders batch: {response.StatusCode}");
