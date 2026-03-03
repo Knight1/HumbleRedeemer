@@ -31,7 +31,7 @@ internal sealed partial class HumbleBundleWebHandler {
 
 		try {
 			while (true) {
-				string url = $"/client/catalog?property=start&direction=desc&index={pageIndex}";
+				string url = $"{ClientCatalogPath}?property=start&direction=desc&index={pageIndex}";
 				HttpResponseMessage response = await SendAsync(() => {
 					HttpRequestMessage req = new(HttpMethod.Get, url);
 					req.Headers.Add("X-Requested-With", "XMLHttpRequest");

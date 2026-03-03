@@ -120,7 +120,7 @@ internal sealed partial class HumbleBundleWebHandler {
 			ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Attempting to login to HumbleBundle...");
 
 			// Step 1: Get login page to extract CSRF token
-			HttpResponseMessage loginPageResponse = await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, "/login")).ConfigureAwait(false);
+			HttpResponseMessage loginPageResponse = await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, LoginPath)).ConfigureAwait(false);
 
 			ASF.ArchiLogger.LogGenericDebug($"[{BotName}] Login page response: {loginPageResponse.StatusCode} from {loginPageResponse.RequestMessage?.RequestUri}");
 
@@ -185,11 +185,11 @@ internal sealed partial class HumbleBundleWebHandler {
 			}
 
 			HttpResponseMessage loginResponse = await SendAsync(() => {
-				HttpRequestMessage req = new(HttpMethod.Post, "/processlogin") {
+				HttpRequestMessage req = new(HttpMethod.Post, ProcessLoginPath) {
 					Content = new FormUrlEncodedContent(loginData)
 				};
 
-				req.Headers.Add("Referer", $"{BaseUrl}/login");
+				req.Headers.Add("Referer", $"{BaseUrl}{LoginPath}");
 				req.Headers.Add("Origin", BaseUrl);
 
 				if (csrfCookie != null) {
@@ -258,11 +258,11 @@ internal sealed partial class HumbleBundleWebHandler {
 				};
 
 				HttpResponseMessage twoFactorResponse = await SendAsync(() => {
-					HttpRequestMessage req = new(HttpMethod.Post, "/processlogin") {
+					HttpRequestMessage req = new(HttpMethod.Post, ProcessLoginPath) {
 						Content = new FormUrlEncodedContent(twoFactorLoginData)
 					};
 
-					req.Headers.Add("Referer", $"{BaseUrl}/login");
+					req.Headers.Add("Referer", $"{BaseUrl}{LoginPath}");
 					req.Headers.Add("Origin", BaseUrl);
 
 					if (csrfCookie != null) {
@@ -314,10 +314,10 @@ internal sealed partial class HumbleBundleWebHandler {
 	private async Task<bool> VerifySessionAsync() {
 		try {
 			// Use the user/order API to verify the session
-			HttpResponseMessage response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, "/api/v1/user/order")).ConfigureAwait(false);
+			HttpResponseMessage response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, ApiUserOrderPath)).ConfigureAwait(false);
 
 			// If we're redirected to login page, session is invalid
-			if (response.RequestMessage?.RequestUri?.AbsolutePath.Contains("/login", StringComparison.OrdinalIgnoreCase) == true) {
+			if (response.RequestMessage?.RequestUri?.AbsolutePath.Contains(LoginPath, StringComparison.OrdinalIgnoreCase) == true) {
 				ASF.ArchiLogger.LogGenericDebug($"[{BotName}] Session verification failed: redirected to login");
 				return false;
 			}

@@ -62,7 +62,7 @@ internal sealed partial class HumbleBundleWebHandler {
 		}
 
 		try {
-			HttpResponseMessage response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, $"/membership/{choiceUrl}")).ConfigureAwait(false);
+			HttpResponseMessage response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, $"{MembershipPath}{choiceUrl}")).ConfigureAwait(false);
 
 			if (!response.IsSuccessStatusCode) {
 				ASF.ArchiLogger.LogGenericError($"[{BotName}] Failed to fetch choice page for '{choiceUrl}': {response.StatusCode}");
@@ -299,11 +299,11 @@ internal sealed partial class HumbleBundleWebHandler {
 			ASF.ArchiLogger.LogGenericDebug($"[{BotName}] Choosing content: gamekey={gameKey}, parent={parentIdentifier}, identifiers={string.Join(", ", identifiers)}");
 
 			HttpResponseMessage response = await SendAsync(() => {
-				HttpRequestMessage req = new(HttpMethod.Post, "/humbler/choosecontent") {
+				HttpRequestMessage req = new(HttpMethod.Post, HumblerChooseContentPath) {
 					Content = new StringContent(body, System.Text.Encoding.UTF8, "application/x-www-form-urlencoded")
 				};
 
-				req.Headers.Add("Referer", $"{BaseUrl}/home/library");
+				req.Headers.Add("Referer", $"{BaseUrl}{HomeLibraryPath}");
 				req.Headers.Add("Origin", BaseUrl);
 
 				foreach (Cookie cookie in CookieContainer.GetCookies(baseUri)) {

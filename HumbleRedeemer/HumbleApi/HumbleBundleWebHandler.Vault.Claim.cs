@@ -20,7 +20,7 @@ internal sealed partial class HumbleBundleWebHandler {
 			string body = $"machine_name={Uri.EscapeDataString(downloadMachineName)}&filename={Uri.EscapeDataString(filename)}";
 
 			HttpResponseMessage response = await SendAsync(() => {
-				HttpRequestMessage req = new(HttpMethod.Post, "/api/v1/user/download/sign") {
+				HttpRequestMessage req = new(HttpMethod.Post, ApiUserDownloadSignPath) {
 					Content = new StringContent(body, System.Text.Encoding.UTF8, "application/x-www-form-urlencoded")
 				};
 

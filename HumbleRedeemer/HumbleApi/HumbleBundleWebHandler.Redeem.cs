@@ -33,11 +33,11 @@ internal sealed partial class HumbleBundleWebHandler {
 			ASF.ArchiLogger.LogGenericDebug($"[{BotName}] Redeeming key: machineName={machineName}, gameKey={gameKey}, keyIndex={keyIndex}, gift={gift}");
 
 			HttpResponseMessage response = await SendAsync(() => {
-				HttpRequestMessage req = new(HttpMethod.Post, "/humbler/redeemkey") {
+				HttpRequestMessage req = new(HttpMethod.Post, HumblerRedeemKeyPath) {
 					Content = new StringContent(body, System.Text.Encoding.UTF8, "application/x-www-form-urlencoded")
 				};
 
-				req.Headers.Add("Referer", $"{BaseUrl}/home/library");
+				req.Headers.Add("Referer", $"{BaseUrl}{HomeLibraryPath}");
 				req.Headers.Add("Origin", BaseUrl);
 
 				foreach (Cookie cookie in CookieContainer.GetCookies(baseUri)) {
@@ -108,7 +108,7 @@ internal sealed partial class HumbleBundleWebHandler {
 						string? giftKey = prop.Value.GetString();
 
 						if (!string.IsNullOrEmpty(giftKey)) {
-							string giftUrl = $"https://www.humblebundle.com/gift?key={Uri.EscapeDataString(giftKey)}";
+							string giftUrl = $"{BaseUrl}{GiftPath}?key={Uri.EscapeDataString(giftKey)}";
 							ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Gift URL generated for '{machineName}': {giftUrl}");
 							return giftUrl;
 						}

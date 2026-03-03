@@ -9,6 +9,33 @@ namespace HumbleRedeemer;
 internal sealed partial class HumbleBundleWebHandler : IDisposable {
 	private const string BaseUrl = "https://www.humblebundle.com";
 
+	// Page paths
+	private const string LoginPath = "/login";
+	private const string ProcessLoginPath = "/processlogin";
+	private const string HomeLibraryPath = "/home/library";
+
+	// API paths
+	private const string ApiUserOrderPath = "/api/v1/user/order";
+	private const string ApiOrderPath = "/api/v1/order/";
+	private const string ApiOrdersPath = "/api/v1/orders";
+	private const string ApiSubscriptionProductsPath = "/api/v1/subscriptions/humble_monthly/subscription_products_with_gamekeys/";
+	private const string ApiUserDownloadSignPath = "/api/v1/user/download/sign";
+
+	// Membership paths
+	private const string MembershipPath = "/membership/";
+	private const string MembershipPayEarlyPath = "/membership/payearly";
+	private const string MembershipPayEarlyStatusPath = "/membership/payearlystatus/";
+
+	// Humbler paths
+	private const string HumblerRedeemKeyPath = "/humbler/redeemkey";
+	private const string HumblerChooseContentPath = "/humbler/choosecontent";
+
+	// Client paths
+	private const string ClientCatalogPath = "/client/catalog";
+
+	// Gift path
+	private const string GiftPath = "/gift";
+
 	private readonly CookieContainer CookieContainer;
 	private readonly HttpClient HttpClient;
 	private readonly SocketsHttpHandler HttpHandler;

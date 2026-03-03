@@ -39,7 +39,7 @@ internal sealed partial class HumbleBundleWebHandler {
 		try {
 			// The subscription products API only lists paid months with their gamekeys.
 			// If the current month already appears with a gamekey, it is already paid.
-			HttpResponseMessage response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, "/api/v1/subscriptions/humble_monthly/subscription_products_with_gamekeys/")).ConfigureAwait(false);
+			HttpResponseMessage response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, ApiSubscriptionProductsPath)).ConfigureAwait(false);
 
 			if (response.IsSuccessStatusCode) {
 				string json = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
@@ -153,7 +153,7 @@ internal sealed partial class HumbleBundleWebHandler {
 
 			if (!hasCsrfCookie) {
 				ASF.ArchiLogger.LogGenericDebug($"[{BotName}] csrf_cookie not found, fetching /membership to obtain one");
-				await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, $"/membership/{choiceUrl}")).ConfigureAwait(false);
+				await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, $"{MembershipPath}{choiceUrl}")).ConfigureAwait(false);
 			}
 
 			// Read CSRF token from the csrf_cookie
@@ -172,11 +172,11 @@ internal sealed partial class HumbleBundleWebHandler {
 			ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Initiating early payment for product: {product}");
 
 			HttpResponseMessage response = await SendAsync(() => {
-				HttpRequestMessage req = new(HttpMethod.Post, "/membership/payearly") {
+				HttpRequestMessage req = new(HttpMethod.Post, MembershipPayEarlyPath) {
 					Content = new StringContent(body, System.Text.Encoding.UTF8, "application/x-www-form-urlencoded")
 				};
 
-				req.Headers.Add("Referer", $"{BaseUrl}/membership/{choiceUrl}");
+				req.Headers.Add("Referer", $"{BaseUrl}{MembershipPath}{choiceUrl}");
 				req.Headers.Add("Origin", BaseUrl);
 				req.Headers.Add("X-Requested-With", "XMLHttpRequest");
 				return req;
@@ -250,7 +250,7 @@ internal sealed partial class HumbleBundleWebHandler {
 
 			try {
 				HttpResponseMessage response = await SendAsync(() => {
-					HttpRequestMessage req = new(HttpMethod.Get, $"/membership/payearlystatus/{jobId}");
+					HttpRequestMessage req = new(HttpMethod.Get, $"{MembershipPayEarlyStatusPath}{jobId}");
 					req.Headers.Add("X-Requested-With", "XMLHttpRequest");
 					return req;
 				}).ConfigureAwait(false);
