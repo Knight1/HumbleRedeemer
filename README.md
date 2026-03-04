@@ -76,6 +76,24 @@ Add HumbleBundle settings directly to your bot's configuration file in `config/<
 - `HumbleBundlePayMonthlyButNotReveal` - If `true` (requires `HumbleBundleAutoPayMonthly`), pay for the current month but do not reveal any keys (default: false)
 - `HumbleBundlePayMonthlyRevealButNotToSteam` - If `true` (requires `HumbleBundleAutoPayMonthly`), pay and reveal keys for the current month but do not send them to Steam (default: false)
 - `HumbleBundleClaimVaultGames` - If `true`, register all Humble Vault games to the account so they remain accessible after the subscription ends. Games are only claimed once and tracked in the bot cache (default: false)
+- `HumbleBundleRedeemGogKeys` - If `true`, also reveal GOG keys (`gog` and `gog_keyless`) from your Humble orders. For `gog` keys the revealed key string is logged; for `gog_keyless` the GOG order URL is logged (default: false)
+
+### key_types
+- "generic"
+- "steam"
+- "origin"
+- "epic_keyless"
+- "gog_keyless"
+- "blizzard"
+- "uplay"
+- "uplay_keyless"
+- "external_key"
+- "squareenix"
+- "arenanet"
+- "gog"
+- "nintendo_direct"
+- "origin_keyless"
+- "desura"
 
 ---
 
