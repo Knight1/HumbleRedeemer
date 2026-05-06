@@ -18,6 +18,7 @@ My motivation for this topic came after I read about Steam keys beeing replaced 
 - Choice is an Abo but the keys expire now too
 - Region Lock
 - non exhausted keys but trying to redeem says they are exhausted.
+- now they are shortening the expiry date AFTER purchase
 
 ---
 
