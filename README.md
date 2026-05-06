@@ -37,8 +37,8 @@ Add HumbleBundle settings directly to your bot's configuration file in `config/<
 ```json
 {
   "HumbleBundleEnabled": true,
-  "HumbleBundleUsername": "your_humblebundle_email@example.com",
-  "HumbleBundlePassword": "your_humblebundle_password",
+  "HumbleBundleUsername": "ign@humblebundle.com",
+  "HumbleBundlePassword": "humblewasaweseome",
   "HumbleBundleTwoFactorCode": "",
   "HumbleBundleRedeemRetryIntervalMinutes": 60,
   "HumbleBundleIgnoreStoreLocation": false,
@@ -128,20 +128,6 @@ Add the proxy to your bot configuration:
 
 ---
 
-## Implementation Details
-
-- Sample `MyAwesomePlugin` ASF plugin project with `ArchiSteamFarm` reference in git subtree.
-- Project structure supporting `IGitHubPluginUpdates` ASF interface, allowing for convenient plugin updates.
-- Seamless hook into the ASF build process, which simplifies the project structure, as you effectively inherit the default settings official ASF projects are built with. Of course, free to override.
-- GitHub actions CI script, which verifies whether your project is possible to build. You can easily enhance it with unit tests when/if you'll have any.
-- GitHub actions publish script, heavily inspired by ASF build process. Publish script allows you to `git tag` and `git push` selected tag, while CI will build, pack, create release on GitHub and upload the resulting artifacts, automatically.
-- GitHub actions ASF reference update script, which by default runs every day and ensures that your git submodule is tracking latest ASF (stable) release. Please note that this is a reference update only, the actual commit your plugin is built against is developer's responsibility not covered by this action, as it requires actual testing and verification. Because of that, commit created through this workflow can't possibly create any kind of build regression, it's a helper for you to more easily track latest ASF stable release.
-- Configuration file for **[Renovate](https://github.com/renovatebot/renovate)** bot, which you can optionally decide to use. Using renovate, apart from bumping your library dependencies, can also cover bumping ASF commit that your plugin is built against, which together with above workflow will ensure that you're effectively tracking latest ASF (stable) release.
-- Code style that matches the one we use at ASF, feel free to modify it to suit you.
-- Other misc files for integration with `git` and GitHub.
-
----
-
 ## Recommended steps
 
 Here we list steps that are **not mandatory**, but worthy to consider after using this repo as a template. While we'd recommend to cover all of those, it's totally alright if you don't. We ordered those according to our recommended priority.
@@ -155,10 +141,6 @@ Here we list steps that are **not mandatory**, but worthy to consider after usin
 - Provide your own **[`CODE_OF_CONDUCT.md`](https://github.com/JustArchiNET/ASF-PluginTemplate/blob/main/.github/CODE_OF_CONDUCT.md#enforcement)** if you'd like to. If you're fine with ours, you can simply replace `TODO@example.com` e-mail with your own.
 
 ---
-
-### Compilation
-
-Simply execute `dotnet build MyAwesomePlugin` and find your binaries in `MyAwesomePlugin/bin` folder, which you can drag to ASF's `plugins` folder. Keep in mind however that your plugin build created this way is based on existence of your .NET SDK and might not work on other machines or other SDK versions - for creating actual package with your plugin use `dotnet publish MyAwesomePlugin -c Release -o out` command instead, which will create a more general, packaged version in `out` directory. Likewise, use `-c Debug` if for some reason you'd like more general `Debug` build instead.
 
 ### Library references
 
