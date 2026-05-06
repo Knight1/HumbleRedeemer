@@ -26,6 +26,7 @@ My motivation for this topic came after I read about Steam keys beeing replaced 
 ### 1. Build the Plugin
 
 ```bash
+git submodule update --init
 dotnet publish HumbleRedeemer -c Release -o ASF/plugins/
 ```
 
@@ -52,7 +53,8 @@ Add HumbleBundle settings directly to your bot's configuration file in `config/<
   "HumbleBundleAutoPayMonthly": false,
   "HumbleBundlePayMonthlyButNotReveal": false,
   "HumbleBundlePayMonthlyRevealButNotToSteam": false,
-  "HumbleBundleClaimVaultGames": false
+  "HumbleBundleClaimVaultGames": false,
+  "HumbleBundleProxy": ""
 }
 ```
 
@@ -77,6 +79,35 @@ Add HumbleBundle settings directly to your bot's configuration file in `config/<
 - `HumbleBundlePayMonthlyRevealButNotToSteam` - If `true` (requires `HumbleBundleAutoPayMonthly`), pay and reveal keys for the current month but do not send them to Steam (default: false)
 - `HumbleBundleClaimVaultGames` - If `true`, register all Humble Vault games to the account so they remain accessible after the subscription ends. Games are only claimed once and tracked in the bot cache (default: false)
 - `HumbleBundleRedeemGogKeys` - If `true`, also reveal GOG keys (`gog` and `gog_keyless`) from your Humble orders. For `gog` keys the revealed key string is logged; for `gog_keyless` the GOG order URL is logged (default: false)
+- `HumbleBundleProxy` - Optional HTTP/SOCKS5 proxy URL for all Humble Bundle requests. Required when running on a VPS or cloud server whose IP is blocked by Cloudflare (see [Proxy Support](#proxy-support) below)
+
+### Proxy Support
+
+Cloudflare blocks POST requests from datacenter/hosting IP ranges to Humble Bundle's key redemption endpoints (`/humbler/redeemkey`, `/humbler/choosecontent`). If you are running ASF on a VPS or cloud server, you will need a residential proxy to bypass this.
+
+When a Cloudflare IP/ASN block is detected, the plugin logs an error and **skips all further Humble Bundle requests** until restarted with a proxy configured.
+
+Add the proxy to your bot configuration:
+
+```json
+{
+  "HumbleBundleProxy": "socks5://127.0.0.1:1080"
+}
+```
+
+**Supported proxy formats:**
+
+| Format | Example |
+|--------|---------|
+| SOCKS5 | `socks5://127.0.0.1:1080` |
+| SOCKS5 with auth | `socks5://user:pass@proxy.example.com:1080` |
+| HTTP | `http://proxy.example.com:8080` |
+| HTTP with auth | `http://user:pass@proxy.example.com:8080` |
+
+**Options for obtaining a residential IP:**
+
+- **SSH SOCKS tunnel from home** (free) — run `ssh -D 1080 -N user@your-home-ip` on the server, then set `"HumbleBundleProxy": "socks5://127.0.0.1:1080"`
+- **Residential proxy service** — providers such as Bright Data, Oxylabs, or similar
 
 ### key_types
 - "generic"
