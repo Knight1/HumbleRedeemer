@@ -108,7 +108,8 @@ internal sealed partial class HumbleRedeemer {
 		bool steamRateLimited = false;
 
 		foreach ((HumbleTpkInfo tpk, bool asGift, bool skipSteam) in toRedeem) {
-			string? key = await webHandler.RedeemKeyAsync(tpk.MachineName, tpk.GameKey, tpk.KeyIndex, asGift).ConfigureAwait(false);
+			HumbleRedeemResult redeem = await webHandler.RedeemKeyAsync(tpk.MachineName, tpk.GameKey, tpk.KeyIndex, asGift).ConfigureAwait(false);
+			string? key = redeem.Key;
 
 			if (!string.IsNullOrEmpty(key)) {
 				if (asGift) {
@@ -147,7 +148,14 @@ internal sealed partial class HumbleRedeemer {
 					steamSkippedForRateLimit++;
 				}
 			} else {
-				ASF.ArchiLogger.LogGenericWarning($"[{bot.BotName}] FAILED TO REDEEM: '{tpk.HumanName}' (AppID: {tpk.SteamAppId})");
+				string reason = redeem.ErrorType switch {
+					"keys_depleted_email" => "depleted",
+					"not_logged_in" => "not logged in",
+					"transport" => "network error",
+					"parse_error" => "bad response",
+					_ => redeem.ErrorType ?? "unknown"
+				};
+				ASF.ArchiLogger.LogGenericWarning($"[{bot.BotName}] FAILED TO REDEEM: '{tpk.HumanName}' (AppID: {tpk.SteamAppId}) - {reason}");
 				failed++;
 			}
 

@@ -59,7 +59,9 @@ internal sealed partial class HumbleRedeemer {
 				// hides keys we still owe — but it does cut out the redundant page-fetch
 				// + "CHOICE REDEEMED" log spam for finished months.
 				if (choiceOrder.Completed) {
-					ASF.ArchiLogger.LogGenericDebug($"[{bot.BotName}] CHOICE SKIPPED (already complete): '{choiceOrder.HumanName}' (delete the bot cache to force re-process)");
+					// Per-choice line stays at debug level (only visible when ASF is in debug mode);
+					// the visible summary at the bottom of this method aggregates the count + cache hint.
+					ASF.ArchiLogger.LogGenericDebug($"[{bot.BotName}] CHOICE SKIPPED (already complete): '{choiceOrder.HumanName}'");
 					totalCompletedSkipped++;
 					continue;
 				}
@@ -112,7 +114,8 @@ internal sealed partial class HumbleRedeemer {
 						}
 
 						if (wasAlreadyRevealed) {
-							ASF.ArchiLogger.LogGenericDebug($"[{bot.BotName}] CHOICE ALREADY REVEALED (cached): '{result.GameName}' from {result.ChoiceTitle}");
+							// No per-game log here — even at debug level this would emit one line
+							// per cached key, hundreds per run. The summary at the end shows the count.
 							totalAlreadyRevealed++;
 						} else if (revealButNotToSteam) {
 							ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] CHOICE REVEALED (not for Steam): '{result.GameName}' from {result.ChoiceTitle} => {result.Key}");
@@ -166,7 +169,7 @@ internal sealed partial class HumbleRedeemer {
 
 							if (existing != null && !string.IsNullOrEmpty(existing.RedeemedKeyVal)) {
 								// We already have the key — flake, not a real failure.
-								ASF.ArchiLogger.LogGenericDebug($"[{bot.BotName}] CHOICE PAGE FLAKE (key cached, ignoring): '{result.GameName}' from {result.ChoiceTitle}");
+								// No per-game log: same reasoning as the wasAlreadyRevealed branch above.
 								totalAlreadyRevealed++;
 								continue;
 							}
@@ -237,7 +240,7 @@ internal sealed partial class HumbleRedeemer {
 		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Newly revealed: {totalNewlyRevealed}, Already revealed (cached): {totalAlreadyRevealed}, Failed: {totalFailed}{failurePlaceholderSummary}, Skipped expired/sold-out: {totalSkipped}");
 
 		if (totalCompletedSkipped > 0) {
-			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Skipped {totalCompletedSkipped} previously-completed Choice orders");
+			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] {totalCompletedSkipped} Choice orders skipped (already complete — delete the bot cache to force re-process)");
 		}
 
 		if (ordersMarkedCompleted > 0) {

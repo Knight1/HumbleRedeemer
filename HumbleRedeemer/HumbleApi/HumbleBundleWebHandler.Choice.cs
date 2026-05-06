@@ -368,6 +368,28 @@ internal sealed partial class HumbleBundleWebHandler {
 	}
 
 	/// <summary>
+	/// Maps a Humble redeem-error type/message into the short label that surfaces in
+	/// <see cref="ChoiceRedemptionResult.Error"/> and downstream logs. Known types get their
+	/// own labels (e.g. <c>Depleted</c> for <c>keys_depleted_email</c>) so the
+	/// <c>CHOICE FAILED</c> log line says <em>why</em> rather than just "Redemption failed".
+	/// </summary>
+	private static string MapRedeemErrorToChoiceLabel(string? errorType, string? errorMessage) {
+		if (string.IsNullOrEmpty(errorType)) {
+			return "Redemption failed";
+		}
+
+		return errorType switch {
+			"keys_depleted_email" => "Depleted",
+			"not_logged_in" => "Not logged in",
+			"transport" => "Network error",
+			"parse_error" => "Bad response from Humble",
+			"missing_key" => "Humble returned success but no key",
+			"missing_giftkey" => "Humble returned success but no gift key",
+			_ => string.IsNullOrEmpty(errorMessage) ? errorType : $"{errorType}: {errorMessage}"
+		};
+	}
+
+	/// <summary>
 	/// Process a single Humble Choice order: choose all games and redeem their keys
 	/// </summary>
 	internal async Task<List<ChoiceRedemptionResult>> ProcessChoiceOrderAsync(string gameKey, string choiceUrl, string humanName) {
@@ -460,15 +482,17 @@ internal sealed partial class HumbleBundleWebHandler {
 
 				// Redeem the key
 				ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Redeeming Choice game: {game.Title}");
-				string? key = await RedeemKeyAsync(tpkd.MachineName, pageData.GameKey, 0, false).ConfigureAwait(false);
+				HumbleRedeemResult redeem = await RedeemKeyAsync(tpkd.MachineName, pageData.GameKey, 0, false).ConfigureAwait(false);
 
 				results.Add(new ChoiceRedemptionResult {
 					GameName = game.Title,
 					MachineName = tpkd.MachineName,
 					KeyType = tpkd.KeyType,
-					Key = key,
+					Key = redeem.Key,
 					ChoiceTitle = pageData.Title,
-					Error = string.IsNullOrEmpty(key) ? "Redemption failed" : null
+					Error = string.IsNullOrEmpty(redeem.Key)
+						? MapRedeemErrorToChoiceLabel(redeem.ErrorType, redeem.ErrorMessage)
+						: null
 				});
 
 				// Small delay between redemptions

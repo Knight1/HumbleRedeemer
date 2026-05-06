@@ -8,15 +8,31 @@ using ArchiSteamFarm.Helpers.Json;
 
 namespace HumbleRedeemer;
 
+/// <summary>
+/// Result of a Humble Bundle key redemption attempt. <see cref="Key"/> is non-null on success
+/// (the revealed Steam key, or the gift URL when called with <c>gift=true</c>); on failure the
+/// <see cref="ErrorType"/> and <see cref="ErrorMessage"/> fields hold the values Humble returned
+/// (e.g. <c>error="keys_depleted_email"</c> / <c>error_msg="Keys are temporarily exhausted ..."</c>).
+/// </summary>
+internal sealed record HumbleRedeemResult(string? Key, string? ErrorType, string? ErrorMessage) {
+	internal static readonly HumbleRedeemResult NotLoggedIn = new(null, "not_logged_in", "Not logged in to HumbleBundle");
+	internal static readonly HumbleRedeemResult Transport = new(null, "transport", "HTTP request failed");
+	internal static readonly HumbleRedeemResult ParseError = new(null, "parse_error", "Could not parse Humble response");
+	internal static readonly HumbleRedeemResult MissingKey = new(null, "missing_key", "Key missing from successful response");
+	internal static readonly HumbleRedeemResult MissingGiftKey = new(null, "missing_giftkey", "Gift key missing from successful response");
+}
+
 internal sealed partial class HumbleBundleWebHandler {
 	/// <summary>
-	/// Redeem a key from HumbleBundle. Returns the Steam key string on success, or null on failure.
-	/// When gift is true, returns the gift URL instead.
+	/// Redeem a key from HumbleBundle. Returns a <see cref="HumbleRedeemResult"/> with either
+	/// the revealed key (or gift URL when <paramref name="gift"/> is true) or the error type
+	/// reported by Humble (e.g. <c>keys_depleted_email</c>) so callers can categorise the
+	/// failure precisely.
 	/// </summary>
-	internal async Task<string?> RedeemKeyAsync(string machineName, string gameKey, int keyIndex, bool gift = false) {
+	internal async Task<HumbleRedeemResult> RedeemKeyAsync(string machineName, string gameKey, int keyIndex, bool gift = false) {
 		if (!IsLoggedIn) {
 			ASF.ArchiLogger.LogGenericError($"[{BotName}] Not logged in to HumbleBundle");
-			return null;
+			return HumbleRedeemResult.NotLoggedIn;
 		}
 
 		try {
@@ -44,7 +60,7 @@ internal sealed partial class HumbleBundleWebHandler {
 				string errorBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
 				ASF.ArchiLogger.LogGenericError($"[{BotName}] Failed to redeem key for '{machineName}': {response.StatusCode}");
 				ASF.ArchiLogger.LogGenericDebug($"[{BotName}] Redeem error response: {errorBody[..Math.Min(500, errorBody.Length)]}");
-				return null;
+				return new HumbleRedeemResult(null, $"http_{(int) response.StatusCode}", response.StatusCode.ToString());
 			}
 
 			string jsonResponse = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
@@ -58,12 +74,12 @@ internal sealed partial class HumbleBundleWebHandler {
 				responseData = jsonResponse.ToJsonObject<JsonElement>();
 			} catch (Exception ex) {
 				ASF.ArchiLogger.LogGenericException(ex, $"[{BotName}] Failed to parse redeem response JSON");
-				return null;
+				return HumbleRedeemResult.ParseError;
 			}
 
 			if (responseData.ValueKind != JsonValueKind.Object) {
 				ASF.ArchiLogger.LogGenericError($"[{BotName}] Unexpected redeem response format");
-				return null;
+				return HumbleRedeemResult.ParseError;
 			}
 
 			// Check for success/error fields in the response
@@ -88,7 +104,7 @@ internal sealed partial class HumbleBundleWebHandler {
 			// Handle explicit failure response
 			if (success == false) {
 				ASF.ArchiLogger.LogGenericWarning($"[{BotName}] Redeem failed for '{machineName}': {errorType ?? "unknown"} - {errorMsg ?? "no message"}");
-				return null;
+				return new HumbleRedeemResult(null, errorType ?? "unknown", errorMsg);
 			}
 
 			if (gift) {
@@ -100,13 +116,13 @@ internal sealed partial class HumbleBundleWebHandler {
 						if (!string.IsNullOrEmpty(giftKey)) {
 							string giftUrl = $"{BaseUrl}{GiftPath}?key={Uri.EscapeDataString(giftKey)}";
 							ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Gift URL generated for '{machineName}': {giftUrl}");
-							return giftUrl;
+							return new HumbleRedeemResult(giftUrl, null, null);
 						}
 					}
 				}
 
 				ASF.ArchiLogger.LogGenericError($"[{BotName}] Gift key not found in redeem response for '{machineName}'");
-				return null;
+				return HumbleRedeemResult.MissingGiftKey;
 			}
 
 			// Normal mode: extract the key string
@@ -116,16 +132,16 @@ internal sealed partial class HumbleBundleWebHandler {
 
 					if (!string.IsNullOrEmpty(key)) {
 						ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Successfully redeemed key for '{machineName}'");
-						return key;
+						return new HumbleRedeemResult(key, null, null);
 					}
 				}
 			}
 
 			ASF.ArchiLogger.LogGenericError($"[{BotName}] Key not found in redeem response for '{machineName}'");
-			return null;
+			return HumbleRedeemResult.MissingKey;
 		} catch (Exception ex) {
 			ASF.ArchiLogger.LogGenericException(ex, $"[{BotName}] Failed to redeem key for '{machineName}'");
-			return null;
+			return HumbleRedeemResult.Transport;
 		}
 	}
 }
