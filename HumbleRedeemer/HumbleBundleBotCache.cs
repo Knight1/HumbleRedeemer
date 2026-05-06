@@ -25,6 +25,15 @@ internal sealed class HumbleBundleBotCache : SerializableFile {
 	[JsonPropertyName("CachedTpks")]
 	internal List<HumbleTpkInfo> CachedTpks { get; set; } = new();
 
+	/// <summary>
+	/// Persisted list of Humble Choice orders (gamekey → choice URL → human name) so
+	/// <c>ProcessChoiceOrders</c> can run on every restart. Without this, a restart with no
+	/// new orders would silently skip Choice processing entirely.
+	/// </summary>
+	[JsonInclude]
+	[JsonPropertyName("CachedChoiceOrders")]
+	internal List<ChoiceOrderInfo> CachedChoiceOrders { get; set; } = new();
+
 	[JsonInclude]
 	[JsonPropertyName("ClaimedVaultGames")]
 	internal List<string> ClaimedVaultGames { get; set; } = new();

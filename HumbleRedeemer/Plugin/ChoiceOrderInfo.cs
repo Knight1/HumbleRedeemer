@@ -19,6 +19,17 @@ internal sealed class ChoiceOrderInfo {
 	[JsonPropertyName("HumanName")]
 	internal string HumanName { get; set; } = "";
 
+	/// <summary>
+	/// Set to true after a <c>ProcessChoiceOrders</c> pass produces zero failures for this
+	/// order — i.e. all keys are either revealed or known-permanent (sold-out / expired).
+	/// Subsequent runs skip this order entirely so we don't re-fetch the choice page or
+	/// re-emit "CHOICE REDEEMED" log lines for 179 already-revealed games.
+	/// Reset to false if a later pass produces a failure (forces a re-attempt).
+	/// </summary>
+	[JsonInclude]
+	[JsonPropertyName("Completed")]
+	internal bool Completed { get; set; }
+
 	[JsonConstructor]
 	internal ChoiceOrderInfo() { }
 }

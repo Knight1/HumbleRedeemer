@@ -159,6 +159,14 @@ internal sealed partial class HumbleRedeemer {
 		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Expired: {expired}");
 		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Sold out: {soldOut}");
 		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] No App ID (cannot verify): {noAppId}");
+
+		// Surface Choice orders too — they're processed in a separate pass after this comparison
+		// (Choice TPKs aren't in humbleTpks at this point, so the Steam TPK count above doesn't include them).
+		int trackedChoiceOrders = BotChoiceOrders.TryGetValue(bot, out List<ChoiceOrderInfo>? co) ? co.Count : 0;
+		if (trackedChoiceOrders > 0) {
+			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Humble Choice orders to process: {trackedChoiceOrders} (separate from the {humbleTpks.Count} regular TPKs above)");
+		}
+
 		// Automatically redeem unrevealed keys that are not owned
 		if (availableToRedeem > 0) {
 			await RedeemAvailableKeys(bot, humbleTpks, ownedAppIds, countryCode, ignoreStoreLocation, ignoreStoreLocationButRedeem).ConfigureAwait(false);

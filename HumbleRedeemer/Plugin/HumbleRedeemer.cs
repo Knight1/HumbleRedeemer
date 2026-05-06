@@ -134,11 +134,37 @@ internal sealed partial class HumbleRedeemer : IBot, IBotModules, IBotSteamClien
 			// Load cached TPK data and determine which orders are new
 			HashSet<string> cachedGameKeys = new(botCache.CachedGameKeys, StringComparer.OrdinalIgnoreCase);
 			List<HumbleTpkInfo> steamTpks = new(botCache.CachedTpks);
-			List<ChoiceOrderInfo> choiceOrders = new();
+			List<ChoiceOrderInfo> choiceOrders = new(botCache.CachedChoiceOrders);
+			HashSet<string> knownChoiceGameKeys = new(choiceOrders.Select(c => c.GameKey), StringComparer.OrdinalIgnoreCase);
 			List<string> newGameKeys = orderKeys.Where(key => !cachedGameKeys.Contains(key)).ToList();
+			bool choiceCacheUpdated = false;
 
 			if (steamTpks.Count > 0) {
 				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Loaded {steamTpks.Count} cached Steam TPKs from {cachedGameKeys.Count} orders");
+			}
+
+			if (choiceOrders.Count > 0) {
+				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Loaded {choiceOrders.Count} cached Humble Choice orders");
+			}
+
+			// Migration path: cache predates CachedChoiceOrders. Re-fetch cached orders once
+			// to populate the Choice metadata so ProcessChoiceOrders has something to act on.
+			if (choiceOrders.Count == 0 && cachedGameKeys.Count > 0) {
+				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Choice metadata missing from cache — re-fetching {cachedGameKeys.Count} cached orders to discover Humble Choice orders (one-time migration)...");
+				List<string> alreadyCachedKeys = [.. orderKeys.Where(cachedGameKeys.Contains)];
+				Dictionary<string, JsonElement>? rediscovered = await webHandler.GetAllOrdersIndividuallyAsync(alreadyCachedKeys).ConfigureAwait(false);
+
+				if (rediscovered != null) {
+					foreach ((string orderKey, JsonElement orderData) in rediscovered) {
+						ChoiceOrderInfo? choiceInfo = ExtractChoiceOrderInfo(orderKey, orderData);
+						if (choiceInfo != null && knownChoiceGameKeys.Add(choiceInfo.GameKey)) {
+							choiceOrders.Add(choiceInfo);
+						}
+					}
+				}
+
+				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Migration complete: discovered {choiceOrders.Count} Humble Choice orders");
+				choiceCacheUpdated = choiceOrders.Count > 0;
 			}
 
 			if (newGameKeys.Count > 0) {
@@ -149,24 +175,27 @@ internal sealed partial class HumbleRedeemer : IBot, IBotModules, IBotSteamClien
 
 				if (newOrders != null && newOrders.Count > 0) {
 					int newTpkCount = 0;
+					int newChoiceCount = 0;
 
 					foreach ((string orderKey, JsonElement orderData) in newOrders) {
 						List<HumbleTpkInfo> orderTpks = ExtractSteamTpksFromOrder(bot.BotName, orderKey, orderData);
 						steamTpks.AddRange(orderTpks);
 						newTpkCount += orderTpks.Count;
 
-						// Check if this is a Choice order
+						// Check if this is a Choice order — dedupe against the loaded set so a
+						// migration discovery + new-order fetch in the same run can't double-add.
 						ChoiceOrderInfo? choiceInfo = ExtractChoiceOrderInfo(orderKey, orderData);
-						if (choiceInfo != null) {
+						if (choiceInfo != null && knownChoiceGameKeys.Add(choiceInfo.GameKey)) {
 							choiceOrders.Add(choiceInfo);
+							newChoiceCount++;
 						}
 					}
 
 					ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Found {newTpkCount} new Steam TPKs from {newOrders.Count} new orders");
 
-					if (choiceOrders.Count > 0) {
-						ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Found {choiceOrders.Count} Humble Choice orders");
-						BotChoiceOrders[bot] = choiceOrders;
+					if (newChoiceCount > 0) {
+						ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Found {newChoiceCount} new Humble Choice orders");
+						choiceCacheUpdated = true;
 					}
 
 					// Update cache with all known gamekeys and TPKs
@@ -177,6 +206,21 @@ internal sealed partial class HumbleRedeemer : IBot, IBotModules, IBotSteamClien
 				}
 			} else {
 				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] No new orders found, using {steamTpks.Count} cached Steam TPKs");
+			}
+
+			// Persist Choice metadata so subsequent restarts can call ProcessChoiceOrders
+			// even when there are no new orders this session.
+			if (choiceCacheUpdated) {
+				botCache.CachedChoiceOrders = choiceOrders;
+				await botCache.SaveAsync().ConfigureAwait(false);
+			}
+
+			// ALWAYS surface the loaded Choice list — not only when new ones were just found —
+			// so ProcessChoiceOrders runs on every startup as long as the user has any Choice
+			// month at all.
+			if (choiceOrders.Count > 0) {
+				BotChoiceOrders[bot] = choiceOrders;
+				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Tracking {choiceOrders.Count} Humble Choice orders for processing");
 			}
 
 			if (steamTpks.Count > 0) {
