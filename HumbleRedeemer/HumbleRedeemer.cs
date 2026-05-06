@@ -146,7 +146,7 @@ internal sealed class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotC
 		HumbleBundleBotCache botCache = await HumbleBundleBotCache.CreateOrLoad(cacheFilePath).ConfigureAwait(false);
 
 		// Create web handler for this bot
-		HumbleBundleWebHandler webHandler = new(botCache, bot.BotName, config.BlacklistedGameKeys);
+		HumbleBundleWebHandler webHandler = new(botCache, bot.BotName, config.BlacklistedGameKeys, config.Proxy);
 
 		// Try to load saved cookies first
 		bool cookiesLoaded = await webHandler.LoadCookiesAsync().ConfigureAwait(false);

@@ -189,12 +189,7 @@ internal sealed partial class HumbleBundleWebHandler {
 					Content = new FormUrlEncodedContent(loginData)
 				};
 
-				req.Headers.Add("Referer", $"{BaseUrl}{LoginPath}");
-				req.Headers.Add("Origin", BaseUrl);
-
-				if (csrfCookie != null) {
-					req.Headers.Add("csrf-prevention-token", csrfCookie.Value);
-				}
+				AddAjaxHeaders(req, LoginPath);
 
 				return req;
 			}).ConfigureAwait(false);
@@ -220,29 +215,45 @@ internal sealed partial class HumbleBundleWebHandler {
 				}
 
 				if (string.IsNullOrEmpty(twoFactorCode)) {
-					// Check if we can prompt for 2FA interactively (non-headless mode)
 					bool isHeadless = ASF.GlobalConfig?.Headless ?? true;
 
 					if (!isHeadless) {
+						// Cloudflare blocks the 2FA POST from datacenter IPs — prompt for browser session cookie instead
 						ASF.ArchiLogger.LogGenericWarning($"[{BotName}] Two-factor authentication required (method: {twoFactorType})");
-						ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Please enter your HumbleBundle 2FA code:");
+						ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Please log in via your browser and paste the '_simpleauth_sess' cookie value below.");
+						ASF.ArchiLogger.LogGenericInfo($"[{BotName}] (Browser DevTools -> Application -> Cookies -> humblebundle.com -> _simpleauth_sess)");
 
-						// Read 2FA code from console
-						string? inputCode = Console.ReadLine();
+						string? sessionCookie = Console.ReadLine()?.Trim();
 
-						if (!string.IsNullOrEmpty(inputCode)) {
-							twoFactorCode = inputCode.Trim();
-							ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Using provided 2FA code");
-						} else {
-							ASF.ArchiLogger.LogGenericError($"[{BotName}] No 2FA code provided");
+						if (string.IsNullOrEmpty(sessionCookie)) {
+							ASF.ArchiLogger.LogGenericError($"[{BotName}] No session cookie provided");
 							return false;
 						}
-					} else {
-						ASF.ArchiLogger.LogGenericWarning($"[{BotName}] Two-factor authentication required but no code provided (method: {twoFactorType})");
-						ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Please add 'HumbleBundleTwoFactorCode' to your bot configuration with your 2FA code");
-						ASF.ArchiLogger.LogGenericDebug($"[{BotName}] 2FA response: {loginResponseText[..Math.Min(200, loginResponseText.Length)]}");
-						return false;
+
+						// Strip surrounding quotes if pasted with them
+						sessionCookie = sessionCookie.Trim('"', '\'');
+
+						CookieContainer.Add(new Cookie("_simpleauth_sess", sessionCookie, "/", ".humblebundle.com") {
+							Secure = true,
+							HttpOnly = true
+						});
+
+						IsLoggedIn = await VerifySessionAsync().ConfigureAwait(false);
+
+						if (IsLoggedIn) {
+							ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Successfully logged in via browser session cookie");
+							await SaveCookiesAsync().ConfigureAwait(false);
+						} else {
+							ASF.ArchiLogger.LogGenericError($"[{BotName}] Browser session cookie is invalid or expired");
+						}
+
+						return IsLoggedIn;
 					}
+
+					ASF.ArchiLogger.LogGenericWarning($"[{BotName}] Two-factor authentication required but ASF is running in headless mode (method: {twoFactorType})");
+					ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Run ASF with a shell attached to paste a browser session cookie, or configure 'HumbleBundleTwoFactorCode' with a proxy");
+					ASF.ArchiLogger.LogGenericDebug($"[{BotName}] 2FA response: {loginResponseText[..Math.Min(200, loginResponseText.Length)]}");
+					return false;
 				}
 
 				ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Submitting two-factor authentication code (method: {twoFactorType})...");
@@ -262,12 +273,7 @@ internal sealed partial class HumbleBundleWebHandler {
 						Content = new FormUrlEncodedContent(twoFactorLoginData)
 					};
 
-					req.Headers.Add("Referer", $"{BaseUrl}{LoginPath}");
-					req.Headers.Add("Origin", BaseUrl);
-
-					if (csrfCookie != null) {
-						req.Headers.Add("csrf-prevention-token", csrfCookie.Value);
-					}
+					AddAjaxHeaders(req, LoginPath);
 
 					return req;
 				}).ConfigureAwait(false);

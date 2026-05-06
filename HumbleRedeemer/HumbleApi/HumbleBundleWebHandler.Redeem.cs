@@ -28,8 +28,6 @@ internal sealed partial class HumbleBundleWebHandler {
 				body += "&gift=true";
 			}
 
-			Uri baseUri = new(BaseUrl);
-
 			ASF.ArchiLogger.LogGenericDebug($"[{BotName}] Redeeming key: machineName={machineName}, gameKey={gameKey}, keyIndex={keyIndex}, gift={gift}");
 
 			HttpResponseMessage response = await SendAsync(() => {
@@ -37,15 +35,7 @@ internal sealed partial class HumbleBundleWebHandler {
 					Content = new StringContent(body, System.Text.Encoding.UTF8, "application/x-www-form-urlencoded")
 				};
 
-				req.Headers.Add("Referer", $"{BaseUrl}{HomeLibraryPath}");
-				req.Headers.Add("Origin", BaseUrl);
-
-				foreach (Cookie cookie in CookieContainer.GetCookies(baseUri)) {
-					if (cookie.Name.Equals("csrf_cookie", StringComparison.OrdinalIgnoreCase)) {
-						req.Headers.Add("csrf-prevention-token", cookie.Value);
-						break;
-					}
-				}
+				AddAjaxHeaders(req);
 
 				return req;
 			}).ConfigureAwait(false);

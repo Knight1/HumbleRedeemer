@@ -61,6 +61,16 @@ public sealed class HumbleBundleBotConfig {
 	[JsonPropertyName("HumbleBundleIgnoreStoreLocationButRedeem")]
 	public bool IgnoreStoreLocationButRedeem { get; set; } = false;
 
+	/// <summary>
+	/// Optional HTTP/SOCKS5 proxy for Humble Bundle requests.
+	/// Cloudflare blocks datacenter IPs on POST endpoints (/humbler/*).
+	/// Use a residential proxy to bypass this.
+	/// Examples: "socks5://127.0.0.1:1080", "http://user:pass@proxy.example.com:8080"
+	/// </summary>
+	[JsonInclude]
+	[JsonPropertyName("HumbleBundleProxy")]
+	public string? Proxy { get; set; }
+
 	[JsonInclude]
 	[JsonPropertyName("HumbleBundleAutoPayMonthly")]
 	public bool AutoPayMonthly { get; set; } = false;
