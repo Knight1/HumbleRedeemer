@@ -1,0 +1,250 @@
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Composition;
+using System.IO;
+using System.Linq;
+using System.Text.Json;
+using System.Threading.Tasks;
+using ArchiSteamFarm.Core;
+using ArchiSteamFarm.Plugins.Interfaces;
+using ArchiSteamFarm.Steam;
+using JetBrains.Annotations;
+using SteamKit2;
+
+namespace HumbleRedeemer;
+
+#pragma warning disable CA1812 // ASF uses this class during runtime
+[Export(typeof(IPlugin))]
+[UsedImplicitly]
+internal sealed partial class HumbleRedeemer : IBot, IBotModules, IBotSteamClient, IBotConnection, IGitHubPluginUpdates {
+	public string Name => nameof(HumbleRedeemer);
+	public string RepositoryName => "Knight1/HumbleRedeemer";
+	public Version Version => typeof(HumbleRedeemer).Assembly.GetName().Version ?? throw new InvalidOperationException(nameof(Version));
+
+	private static readonly ConcurrentDictionary<Bot, HumbleBundleWebHandler> BotHandlers = new();
+	private static readonly ConcurrentDictionary<Bot, string> BotCountryCodes = new();
+	private static readonly ConcurrentDictionary<Bot, List<HumbleTpkInfo>> BotHumbleTpks = new();
+	private static readonly ConcurrentDictionary<Bot, List<ChoiceOrderInfo>> BotChoiceOrders = new();
+	private static readonly ConcurrentDictionary<Bot, bool> BotComparisonDone = new();
+	private static readonly ConcurrentDictionary<Bot, HumbleBundleBotCache> BotCaches = new();
+	private static readonly ConcurrentDictionary<Bot, System.Threading.Timer> BotRedeemTimers = new();
+	private static readonly ConcurrentDictionary<Bot, HumbleBundleBotConfig> BotConfigs = new();
+
+	/// <summary>Game keys paid via AutoPayMonthly this session, used to control reveal behavior.</summary>
+	private static readonly ConcurrentDictionary<Bot, HashSet<string>> BotPaidGameKeys = new();
+
+	public Task OnLoaded() {
+		ASF.ArchiLogger.LogGenericInfo($"{Name} plugin loaded!");
+
+		return Task.CompletedTask;
+	}
+
+	public async Task OnBotInit(Bot bot) {
+		// This is called when a bot is initialized
+		ArgumentNullException.ThrowIfNull(bot);
+
+		ASF.ArchiLogger.LogGenericDebug($"[{bot.BotName}] Bot initialized");
+
+		await Task.CompletedTask.ConfigureAwait(false);
+	}
+
+	public async Task OnBotInitModules(Bot bot, IReadOnlyDictionary<string, JsonElement>? additionalConfigProperties = null) {
+		ArgumentNullException.ThrowIfNull(bot);
+
+		// Parse bot-specific configuration
+		HumbleBundleBotConfig? config = ParseBotConfig(bot.BotName, additionalConfigProperties);
+
+		if (config == null || !config.Enabled) {
+			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] HumbleBundle integration is disabled");
+			return;
+		}
+
+		// Load bot cache
+		string cacheFilePath = Path.Combine(ArchiSteamFarm.SharedInfo.ConfigDirectory, $"HumbleRedeemer-{bot.BotName}.cache");
+		HumbleBundleBotCache botCache = await HumbleBundleBotCache.CreateOrLoad(cacheFilePath).ConfigureAwait(false);
+
+		// Create web handler for this bot
+		HumbleBundleWebHandler webHandler = new(botCache, bot.BotName, config.BlacklistedGameKeys, config.Proxy);
+
+		// Try to load saved cookies first
+		bool cookiesLoaded = await webHandler.LoadCookiesAsync().ConfigureAwait(false);
+
+		if (!cookiesLoaded) {
+			// No valid saved session — credentials are required for a fresh login
+			if (string.IsNullOrEmpty(config.Username)) {
+				ASF.ArchiLogger.LogGenericWarning($"[{bot.BotName}] HumbleBundle username not configured. Add HumbleBundleUsername to bot config.");
+				webHandler.Dispose();
+				return;
+			}
+
+			string? password = config.Password;
+
+			if (string.IsNullOrEmpty(password)) {
+				bool isHeadless = ASF.GlobalConfig?.Headless ?? true;
+
+				if (isHeadless) {
+					ASF.ArchiLogger.LogGenericWarning($"[{bot.BotName}] HumbleBundle credentials not configured. Add HumbleBundleUsername and HumbleBundlePassword to bot config.");
+					webHandler.Dispose();
+					return;
+				}
+
+				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Please enter your HumbleBundle password:");
+				password = Console.ReadLine()?.Trim();
+
+				if (string.IsNullOrEmpty(password)) {
+					ASF.ArchiLogger.LogGenericError($"[{bot.BotName}] No password entered.");
+					webHandler.Dispose();
+					return;
+				}
+			}
+
+			// No valid saved session, perform login
+			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] No valid HumbleBundle session found, attempting login...");
+
+			bool loginSuccess = await webHandler.LoginAsync(
+				config.Username,
+				password,
+				config.TwoFactorCode,
+				bot
+			).ConfigureAwait(false);
+
+			if (!loginSuccess) {
+				ASF.ArchiLogger.LogGenericError($"[{bot.BotName}] Failed to login to HumbleBundle. Please check your credentials and/or 2FA Code.");
+				webHandler.Dispose();
+
+				return;
+			}
+		} else {
+			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Restored HumbleBundle session from cache");
+		}
+
+		// Auto-pay current month before fetching orders so the new gamekey is in the list
+		await TryAutoPayCurrentMonthAsync(bot, botCache, webHandler, config).ConfigureAwait(false);
+
+		// Claim all Vault games if configured
+		await ClaimAllVaultGamesAsync(bot, botCache, webHandler, config).ConfigureAwait(false);
+
+		// Test API by fetching order keys
+		List<string>? orderKeys = await webHandler.GetOrderKeysAsync().ConfigureAwait(false);
+
+		if (orderKeys != null && orderKeys.Count > 0) {
+			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Successfully authenticated to HumbleBundle. Found {orderKeys.Count} orders.");
+
+			// Load cached TPK data and determine which orders are new
+			HashSet<string> cachedGameKeys = new(botCache.CachedGameKeys, StringComparer.OrdinalIgnoreCase);
+			List<HumbleTpkInfo> steamTpks = new(botCache.CachedTpks);
+			List<ChoiceOrderInfo> choiceOrders = new();
+			List<string> newGameKeys = orderKeys.Where(key => !cachedGameKeys.Contains(key)).ToList();
+
+			if (steamTpks.Count > 0) {
+				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Loaded {steamTpks.Count} cached Steam TPKs from {cachedGameKeys.Count} orders");
+			}
+
+			if (newGameKeys.Count > 0) {
+				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Found {newGameKeys.Count} new orders to fetch (out of {orderKeys.Count} total)");
+
+				// Fetch only new orders individually
+				Dictionary<string, JsonElement>? newOrders = await webHandler.GetAllOrdersIndividuallyAsync(newGameKeys).ConfigureAwait(false);
+
+				if (newOrders != null && newOrders.Count > 0) {
+					int newTpkCount = 0;
+
+					foreach ((string orderKey, JsonElement orderData) in newOrders) {
+						List<HumbleTpkInfo> orderTpks = ExtractSteamTpksFromOrder(bot.BotName, orderKey, orderData);
+						steamTpks.AddRange(orderTpks);
+						newTpkCount += orderTpks.Count;
+
+						// Check if this is a Choice order
+						ChoiceOrderInfo? choiceInfo = ExtractChoiceOrderInfo(orderKey, orderData);
+						if (choiceInfo != null) {
+							choiceOrders.Add(choiceInfo);
+						}
+					}
+
+					ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Found {newTpkCount} new Steam TPKs from {newOrders.Count} new orders");
+
+					if (choiceOrders.Count > 0) {
+						ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Found {choiceOrders.Count} Humble Choice orders");
+						BotChoiceOrders[bot] = choiceOrders;
+					}
+
+					// Update cache with all known gamekeys and TPKs
+					botCache.CachedGameKeys = new List<string>(orderKeys);
+					botCache.CachedTpks = steamTpks;
+					await botCache.SaveAsync().ConfigureAwait(false);
+					ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Saved {steamTpks.Count} TPKs and {orderKeys.Count} gamekeys to cache");
+				}
+			} else {
+				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] No new orders found, using {steamTpks.Count} cached Steam TPKs");
+			}
+
+			if (steamTpks.Count > 0) {
+				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Total: {steamTpks.Count} Steam TPKs across {orderKeys.Count} orders");
+				BotHumbleTpks[bot] = steamTpks;
+			}
+		}
+
+		// Store the config and cache for this bot
+		BotConfigs[bot] = config;
+		BotCaches[bot] = botCache;
+
+		// Store the handler for later use
+		BotHandlers.TryAdd(bot, webHandler);
+	}
+
+	public async Task OnBotDestroy(Bot bot) {
+		ArgumentNullException.ThrowIfNull(bot);
+
+		// Cleanup bot handler and per-bot data
+		if (BotHandlers.TryRemove(bot, out HumbleBundleWebHandler? webHandler)) {
+			webHandler?.Dispose();
+			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] HumbleBundle handler disposed");
+		}
+
+		if (BotRedeemTimers.TryRemove(bot, out System.Threading.Timer? timer)) {
+			await timer.DisposeAsync().ConfigureAwait(false);
+			ASF.ArchiLogger.LogGenericDebug($"[{bot.BotName}] Redeem retry timer disposed");
+		}
+
+		BotCountryCodes.TryRemove(bot, out _);
+		BotHumbleTpks.TryRemove(bot, out _);
+		BotChoiceOrders.TryRemove(bot, out _);
+		BotComparisonDone.TryRemove(bot, out _);
+		BotConfigs.TryRemove(bot, out _);
+		BotCaches.TryRemove(bot, out _);
+		BotPaidGameKeys.TryRemove(bot, out _);
+		BotSteamRedeemRateLimitedUntil.TryRemove(bot, out _);
+	}
+
+	public Task OnBotSteamCallbacksInit(Bot bot, CallbackManager callbackManager) {
+		ArgumentNullException.ThrowIfNull(bot);
+		ArgumentNullException.ThrowIfNull(callbackManager);
+
+		// Register for LoggedOnCallback to capture IPCountryCode
+		callbackManager.Subscribe<SteamUser.LoggedOnCallback>(callback => OnSteamLoggedOn(bot, callback));
+
+		// Register for LicenseListCallback to trigger comparison after OwnedPackages is populated
+		callbackManager.Subscribe<SteamApps.LicenseListCallback>(callback => OnLicenseList(bot));
+
+		return Task.CompletedTask;
+	}
+
+	public Task<IReadOnlyCollection<ClientMsgHandler>?> OnBotSteamHandlersInit(Bot bot) => Task.FromResult<IReadOnlyCollection<ClientMsgHandler>?>(null);
+
+	public Task OnBotDisconnected(Bot bot, EResult reason) {
+		ArgumentNullException.ThrowIfNull(bot);
+
+		// Reset comparison flag so it runs again on reconnect
+		BotComparisonDone.TryRemove(bot, out _);
+
+		return Task.CompletedTask;
+	}
+
+	public Task OnBotLoggedOn(Bot bot) {
+		ArgumentNullException.ThrowIfNull(bot);
+
+		return Task.CompletedTask;
+	}
+}
+#pragma warning restore CA1812 // ASF uses this class during runtime

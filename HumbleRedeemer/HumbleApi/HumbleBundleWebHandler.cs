@@ -69,7 +69,10 @@ internal sealed partial class HumbleBundleWebHandler : IDisposable {
 		};
 
 		if (!string.IsNullOrEmpty(proxyUrl)) {
-			HttpHandler.Proxy = new WebProxy(new Uri(proxyUrl));
+			// We can't use System.Net.WebProxy here: in trimmed ASF builds its
+			// constructors are stripped and any `new WebProxy(...)` call throws
+			// MissingMethodException at runtime. Use a minimal IWebProxy instead.
+			HttpHandler.Proxy = new StaticWebProxy(new Uri(proxyUrl));
 			HttpHandler.UseProxy = true;
 			ASF.ArchiLogger.LogGenericInfo($"[{botName}] Using proxy for HumbleBundle requests");
 		}
@@ -126,5 +129,33 @@ internal sealed partial class HumbleBundleWebHandler : IDisposable {
 		LoginSemaphore.Dispose();
 		HttpClient.Dispose();
 		HttpHandler.Dispose();
+	}
+
+	/// <summary>
+	/// Minimal <see cref="IWebProxy"/> that forwards every request to a single proxy URI.
+	/// We avoid <see cref="WebProxy"/> because trimmed ASF builds strip its constructors,
+	/// causing <see cref="MissingMethodException"/> at runtime. Credentials are parsed
+	/// from the proxy URI's user-info segment if present.
+	/// </summary>
+	private sealed class StaticWebProxy : IWebProxy {
+		private readonly Uri ProxyUri;
+
+		public ICredentials? Credentials { get; set; }
+
+		internal StaticWebProxy(Uri proxyUri) {
+			ArgumentNullException.ThrowIfNull(proxyUri);
+
+			ProxyUri = proxyUri;
+
+			if (!string.IsNullOrEmpty(proxyUri.UserInfo)) {
+				string[] parts = proxyUri.UserInfo.Split(':', 2);
+				string user = Uri.UnescapeDataString(parts[0]);
+				string pass = parts.Length > 1 ? Uri.UnescapeDataString(parts[1]) : string.Empty;
+				Credentials = new NetworkCredential(user, pass);
+			}
+		}
+
+		public Uri GetProxy(Uri destination) => ProxyUri;
+		public bool IsBypassed(Uri host) => false;
 	}
 }

@@ -170,6 +170,18 @@ public sealed class HumbleBundleBotConfig {
 	[JsonPropertyName("HumbleBundleClaimVaultGames")]
 	public bool ClaimVaultGames { get; set; } = false;
 
+	/// <summary>
+	/// When true, revealed Steam keys are immediately submitted to Steam via ASF's native
+	/// <c>Bot.Actions.RedeemKey</c>. Gift-link reveals and keys flagged via the
+	/// <c>…ButNotToSteam</c> options are never forwarded to Steam regardless of this setting.
+	/// On the first run after enabling, previously-revealed keys for games not yet in the
+	/// Steam library are also submitted. Steam's activation rate limit (30 keys, then 1 every
+	/// 3 minutes) is detected and respected automatically.
+	/// </summary>
+	[JsonInclude]
+	[JsonPropertyName("HumbleBundleRedeemOnSteam")]
+	public bool RedeemOnSteam { get; set; } = false;
+
 	[JsonConstructor]
 	public HumbleBundleBotConfig() { }
 }

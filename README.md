@@ -55,6 +55,7 @@ Add HumbleBundle settings directly to your bot's configuration file in `config/<
   "HumbleBundlePayMonthlyButNotReveal": false,
   "HumbleBundlePayMonthlyRevealButNotToSteam": false,
   "HumbleBundleClaimVaultGames": false,
+  "HumbleBundleRedeemOnSteam": false,
   "HumbleBundleProxy": ""
 }
 ```
