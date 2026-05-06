@@ -11,7 +11,7 @@
 		<Authors>Knight1</Authors>
 		<Company>$(Authors)</Company>
 		<Copyright>Copyright © $([System.DateTime]::UtcNow.Year) $(Company)</Copyright>
-		<Description>$(PluginName) description.</Description>
+		<Description>$(PluginName) ASF Plugin for HumbleBundle Automation.</Description>
 		<PackageIcon />
 		<PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
 		<PackageProjectUrl>https://github.com/$(Company)/$(PluginName)</PackageProjectUrl>

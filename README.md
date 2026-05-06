@@ -100,14 +100,9 @@ Add the proxy to your bot configuration:
 | Format | Example |
 |--------|---------|
 | SOCKS5 | `socks5://127.0.0.1:1080` |
-| SOCKS5 with auth | `socks5://user:pass@proxy.example.com:1080` |
-| HTTP | `http://proxy.example.com:8080` |
-| HTTP with auth | `http://user:pass@proxy.example.com:8080` |
-
-**Options for obtaining a residential IP:**
-
-- **SSH SOCKS tunnel from home** (free) — run `ssh -D 1080 -N user@your-home-ip` on the server, then set `"HumbleBundleProxy": "socks5://127.0.0.1:1080"`
-- **Residential proxy service** — providers such as Bright Data, Oxylabs, or similar
+| SOCKS5 with auth | `socks5://user:pass@proxy.ign.com:1080` |
+| HTTP | `http://proxy.ign.com:8080` |
+| HTTP with auth | `http://user:pass@proxy.ign.com:8080` |
 
 ### key_types
 - "generic"
@@ -132,9 +127,7 @@ Add the proxy to your bot configuration:
 
 Here we list steps that are **not mandatory**, but worthy to consider after using this repo as a template. While we'd recommend to cover all of those, it's totally alright if you don't. We ordered those according to our recommended priority.
 
-- If you want to use automatic plugin updates, ensure **[`RepositoryName`](https://github.com/JustArchiNET/ASF-PluginTemplate/blob/main/MyAwesomePlugin/MyAwesomePlugin.cs#L13)** property matches your target repo, this is covered by default in our **[`rename.sh`](https://github.com/JustArchiNET/ASF-PluginTemplate/blob/main/tools/rename.sh)** script. If you want to opt out of that feature, replace **[`IGitHubPluginUpdates`](https://github.com/JustArchiNET/ASF-PluginTemplate/blob/main/MyAwesomePlugin/MyAwesomePlugin.cs#L11)** interface back to its base `IPlugin` one, and remove **[`RepositoryName`](https://github.com/JustArchiNET/ASF-PluginTemplate/blob/main/MyAwesomePlugin/MyAwesomePlugin.cs#L13)** property instead.
-- Choose license based on which you want to share your work. If you'd like to use the same one we do, so Apache 2.0, then you don't need to do anything as the plugin template comes with it. If you'd like to use different one, remove **[`LICENSE.txt`](https://github.com/JustArchiNET/ASF-PluginTemplate/blob/main/LICENSE.txt)** file and provide your own. If you've decided to use different license, it's probably also a good idea to update `PackageLicenseExpression` in **[`Directory.Build.props`](https://github.com/JustArchiNET/ASF-PluginTemplate/blob/main/Directory.Build.props#L16)**.
-- Change this **[`README.md`](https://github.com/JustArchiNET/ASF-PluginTemplate/blob/main/README.md)** in any way you want to. You can check **[ASF's README](https://github.com/JustArchiNET/ArchiSteamFarm/blob/main/README.md)** for some inspiration. We recommend at least a short description of what your plugin can do. Updating `<Description>` in **[`Directory.Build.props`](https://github.com/JustArchiNET/ASF-PluginTemplate/blob/main/Directory.Build.props#L14)** also sounds like a good idea.
+
 - Fill **[`SUPPORT.md`](https://github.com/JustArchiNET/ASF-PluginTemplate/blob/main/.github/SUPPORT.md)** file, so your users can learn where they can ask for help in regards to your plugin.
 - Fill **[`SECURITY.md`](https://github.com/JustArchiNET/ASF-PluginTemplate/blob/main/.github/SECURITY.md)** file, so your users can learn where they should report critical security issues in regards to your plugin.
 - If you want to use **[Renovate bot](https://github.com/renovatebot/renovate)** like we do, we recommend to modify the `:assignee()` block in our **[`renovate.json5`](https://github.com/JustArchiNET/ASF-PluginTemplate/blob/main/.github/renovate.json5#L5)** config file and putting your own GitHub username there. This will allow Renovate bot to assign failing PR to you so you can take a look at it. Everything else can stay as it is, unless you want to modify it of course.
