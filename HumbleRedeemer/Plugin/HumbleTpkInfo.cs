@@ -21,6 +21,16 @@ internal sealed class HumbleTpkInfo {
 	[JsonPropertyName("MachineName")]
 	internal string MachineName { get; set; } = "";
 
+	/// <summary>
+	/// Humble's <c>key_type</c> for this TPK — typically <c>steam</c>, or one of the
+	/// <c>*_keyless</c> variants (<c>epic_keyless</c> / <c>gog_keyless</c> / <c>blizzard_keyless</c> /
+	/// <c>origin_keyless</c>). Empty for legacy cache entries written before this field existed
+	/// (those are all <c>steam</c> in practice — the parser used to filter to that single type).
+	/// </summary>
+	[JsonInclude]
+	[JsonPropertyName("KeyType")]
+	internal string KeyType { get; set; } = "";
+
 	[JsonInclude]
 	[JsonPropertyName("SteamAppId")]
 	internal uint SteamAppId { get; set; }

@@ -107,6 +107,7 @@ internal sealed partial class HumbleRedeemer {
 								GameKey = choiceOrder.GameKey,
 								HumanName = result.GameName,
 								MachineName = result.MachineName,
+								KeyType = result.KeyType,
 								SteamAppId = 0, // Choice page doesn't always provide AppId reliably
 								RedeemedKeyVal = result.Key,
 								IsExpired = false,
@@ -122,6 +123,9 @@ internal sealed partial class HumbleRedeemer {
 						} else {
 							tpk.RedeemedKeyVal = result.Key;
 							tpk.IsChoiceTpk = true;
+							if (string.IsNullOrEmpty(tpk.KeyType)) {
+								tpk.KeyType = result.KeyType;
+							}
 						}
 
 						if (wasAlreadyRevealed) {
@@ -181,8 +185,12 @@ internal sealed partial class HumbleRedeemer {
 							// Retroactively mark cached entries — older cache files predate IsChoiceTpk
 							// so legacy Choice TPKs default to false; setting it here on touch lets the
 							// unrevealed-count predicate include them in this and future passes.
+							// Also backfill KeyType so the keyless-eligibility checks work on legacy entries.
 							if (existing != null) {
 								existing.IsChoiceTpk = true;
+								if (string.IsNullOrEmpty(existing.KeyType)) {
+									existing.KeyType = result.KeyType;
+								}
 							}
 
 							if (existing != null && !string.IsNullOrEmpty(existing.RedeemedKeyVal)) {
@@ -209,6 +217,7 @@ internal sealed partial class HumbleRedeemer {
 									GameKey = choiceOrder.GameKey,
 									HumanName = result.GameName,
 									MachineName = result.MachineName,
+									KeyType = result.KeyType,
 									SteamAppId = 0,
 									RedeemedKeyVal = null,
 									IsExpired = false,

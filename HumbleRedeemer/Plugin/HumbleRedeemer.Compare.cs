@@ -117,6 +117,27 @@ internal sealed partial class HumbleRedeemer {
 				}
 			}
 
+			// Keyless TPKs (epic_keyless / gog_keyless / blizzard_keyless / origin_keyless)
+			// always have AppId=0 — the game is account-linked, not on Steam — so the
+			// SkipUnknownAppIds rule must NOT apply here. Gate by the matching opt-in flag
+			// instead and count the redemption candidate (or already-claimed entry) directly.
+			if (IsKeylessTpk(tpk)) {
+				if (!IsKeylessOptedIn(tpk, config)) {
+					ASF.ArchiLogger.LogGenericDebug($"[{bot.BotName}] KEYLESS SKIPPED ({tpk.KeyType}, opt-in disabled): '{gameName}'");
+					continue;
+				}
+
+				if (hasKey) {
+					ASF.ArchiLogger.LogGenericDebug($"[{bot.BotName}] KEYLESS (already claimed): '{gameName}' [{tpk.KeyType}]");
+					alreadyRedeemed++;
+				} else {
+					ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] KEYLESS (will claim on linked account): '{gameName}' [{tpk.KeyType}]");
+					availableToRedeem++;
+				}
+
+				continue;
+			}
+
 			// Check if we have a steam_app_id to compare
 			if (tpk.SteamAppId == 0) {
 				if (skipUnknownAppIds) {
@@ -179,20 +200,87 @@ internal sealed partial class HumbleRedeemer {
 		// Choice TPKs always carry SteamAppId=0 (Choice page does not expose it reliably) and
 		// are therefore exempt from the SkipUnknownAppIds gate — otherwise depleted Choice keys
 		// would silently disappear from the unrevealed count even though ProcessChoiceOrders
-		// still retries them. Regular orders keep the existing behaviour: unknown-AppId TPKs
-		// are counted only when SkipUnknownAppIds is false.
+		// still retries them. Keyless TPKs are counted only when the user opted in (else we'd
+		// keep retrying claims they explicitly disabled). Regular Steam orders keep the
+		// existing behaviour: unknown-AppId TPKs are counted only when SkipUnknownAppIds is false.
 		int remainingUnrevealed = humbleTpks.Count(t =>
 			string.IsNullOrEmpty(t.RedeemedKeyVal) && !t.IsExpired && !t.SoldOut && !t.IsGift
 			&& IsCountryAllowed(t, countryCode, effectiveIgnoreLocation)
-			&& (t.IsChoiceTpk
-				|| (t.SteamAppId == 0
-					? !skipUnknownAppIds
-					: !ownedAppIds.Contains(t.SteamAppId))));
+			&& (IsKeylessTpk(t)
+				? IsKeylessOptedIn(t, config)
+				: t.IsChoiceTpk
+					|| (t.SteamAppId == 0
+						? !skipUnknownAppIds
+						: !ownedAppIds.Contains(t.SteamAppId))));
 
 		if (remainingUnrevealed > 0) {
 			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] {remainingUnrevealed} keys still unrevealed, starting retry timer");
 			StartRedeemRetryTimer(bot);
 		}
+	}
+
+	/// <summary>
+	/// True for TPKs whose <c>key_type</c> is one of the four <c>*_keyless</c> platforms we
+	/// know how to claim. AppID is always 0 for these (the game is account-linked, not Steam),
+	/// so eligibility/ownership checks must branch on this rather than on AppID.
+	/// </summary>
+	private static bool IsKeylessTpk(HumbleTpkInfo tpk) =>
+		!string.IsNullOrEmpty(tpk.KeyType)
+		&& tpk.KeyType.EndsWith("_keyless", StringComparison.OrdinalIgnoreCase);
+
+	/// <summary>
+	/// True when a keyless TPK matches an opt-in flag the user has enabled. Returns false for
+	/// non-keyless TPKs and for keyless types the user hasn't opted in to — the caller should
+	/// treat those as not-redeemable so they're never claimed.
+	/// </summary>
+	private static bool IsKeylessOptedIn(HumbleTpkInfo tpk, HumbleBundleBotConfig? config) {
+		if (config == null || !IsKeylessTpk(tpk)) {
+			return false;
+		}
+
+		if (string.Equals(tpk.KeyType, "epic_keyless", StringComparison.OrdinalIgnoreCase)) {
+			return config.RedeemEpicKeyless;
+		}
+
+		if (string.Equals(tpk.KeyType, "gog_keyless", StringComparison.OrdinalIgnoreCase)) {
+			return config.RedeemGogKeyless;
+		}
+
+		if (string.Equals(tpk.KeyType, "blizzard_keyless", StringComparison.OrdinalIgnoreCase)) {
+			return config.RedeemBlizzardKeyless;
+		}
+
+		if (string.Equals(tpk.KeyType, "origin_keyless", StringComparison.OrdinalIgnoreCase)) {
+			return config.RedeemOriginKeyless;
+		}
+
+		return false;
+	}
+
+	/// <summary>
+	/// Synthetic confirmation string stored in <c>RedeemedKeyVal</c> for a successfully-claimed
+	/// keyless TPK. Humble does not always return a usable key string for keyless redemptions —
+	/// we substitute a stable, human-readable value so the cache can mark the TPK as done and
+	/// the unrevealed-count predicate stops counting it.
+	/// </summary>
+	private static string GetKeylessConfirmation(string keyType) {
+		if (string.Equals(keyType, "epic_keyless", StringComparison.OrdinalIgnoreCase)) {
+			return "(keyless: claimed on linked Epic account)";
+		}
+
+		if (string.Equals(keyType, "gog_keyless", StringComparison.OrdinalIgnoreCase)) {
+			return "(keyless: claimed on linked GOG account)";
+		}
+
+		if (string.Equals(keyType, "blizzard_keyless", StringComparison.OrdinalIgnoreCase)) {
+			return "(keyless: claimed on linked Battle.net account)";
+		}
+
+		if (string.Equals(keyType, "origin_keyless", StringComparison.OrdinalIgnoreCase)) {
+			return "(keyless: claimed on linked Origin account)";
+		}
+
+		return "(keyless: claimed on linked account)";
 	}
 
 	private static bool IsCountryAllowed(HumbleTpkInfo tpk, string? countryCode, bool ignoreStoreLocation = false) {

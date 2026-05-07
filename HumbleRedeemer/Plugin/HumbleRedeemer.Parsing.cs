@@ -129,8 +129,17 @@ internal sealed partial class HumbleRedeemer {
 					}
 				}
 
-				// Only process Steam keys
-				if (!string.Equals(keyTypeStr, "steam", StringComparison.OrdinalIgnoreCase)) {
+				// Accept Steam keys plus the four keyless platforms we know how to claim
+				// (epic_keyless / gog_keyless / blizzard_keyless / origin_keyless). Other
+				// types (origin, uplay, blizzard non-keyless, generic vouchers, etc.) are
+				// dropped because we have no redemption flow for them.
+				bool isAcceptedType = string.Equals(keyTypeStr, "steam", StringComparison.OrdinalIgnoreCase)
+					|| string.Equals(keyTypeStr, "epic_keyless", StringComparison.OrdinalIgnoreCase)
+					|| string.Equals(keyTypeStr, "gog_keyless", StringComparison.OrdinalIgnoreCase)
+					|| string.Equals(keyTypeStr, "blizzard_keyless", StringComparison.OrdinalIgnoreCase)
+					|| string.Equals(keyTypeStr, "origin_keyless", StringComparison.OrdinalIgnoreCase);
+
+				if (!isAcceptedType) {
 					continue;
 				}
 
@@ -138,6 +147,7 @@ internal sealed partial class HumbleRedeemer {
 					GameKey = orderKey,
 					HumanName = humanName ?? "Unknown",
 					MachineName = machineName ?? "unknown",
+					KeyType = keyTypeStr ?? "",
 					SteamAppId = steamAppId,
 					KeyIndex = keyIndex,
 					RedeemedKeyVal = redeemedKeyVal,

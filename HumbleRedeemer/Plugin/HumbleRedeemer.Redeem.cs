@@ -45,6 +45,32 @@ internal sealed partial class HumbleRedeemer {
 				continue;
 			}
 
+			bool isKeyless = IsKeylessTpk(tpk);
+
+			// Keyless TPKs are claimed on a linked Epic / GOG / Battle.net / Origin account,
+			// not redeemed on Steam — gate them by the matching opt-in flag and short-circuit
+			// the AppID / ownership / gift-link logic that only applies to Steam keys.
+			if (isKeyless) {
+				if (!IsKeylessOptedIn(tpk, config)) {
+					continue;
+				}
+
+				if (payMonthlyButNotReveal && paidGameKeys.Contains(tpk.GameKey)) {
+					continue;
+				}
+
+				if (!IsCountryAllowed(tpk, countryCode, effectiveIgnoreLocation)) {
+					continue;
+				}
+
+				if (redeemOnlyWithExpiration && !tpk.ExpiryDate.HasValue) {
+					continue;
+				}
+
+				toRedeem.Add((tpk, asGift: false, skipSteam: true));
+				continue;
+			}
+
 			// Unknown AppId: hard skip if the option is enabled, otherwise reveal-but-never-Steam.
 			bool unknownAppId = tpk.SteamAppId == 0;
 
@@ -111,11 +137,24 @@ internal sealed partial class HumbleRedeemer {
 		foreach ((HumbleTpkInfo tpk, bool asGift, bool skipSteam) in toRedeem) {
 			HumbleRedeemResult redeem = await webHandler.RedeemKeyAsync(tpk.MachineName, tpk.GameKey, tpk.KeyIndex, asGift).ConfigureAwait(false);
 			string? key = redeem.Key;
+			bool isKeyless = IsKeylessTpk(tpk);
+
+			// Keyless redemptions don't always return a `key` field — the call still claimed
+			// the game on the linked account, Humble just didn't echo back a string. Treat
+			// `missing_key` (success-without-key) as a successful keyless claim and substitute
+			// our synthetic confirmation; if Humble *did* return a string (typically a
+			// human-readable "Redeemed to <Account>" message), use that instead.
+			if (string.IsNullOrEmpty(key) && isKeyless && redeem.ErrorType == "missing_key") {
+				key = GetKeylessConfirmation(tpk.KeyType);
+			}
 
 			if (!string.IsNullOrEmpty(key)) {
 				if (asGift) {
 					ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] REDEEMED AS GIFT: '{tpk.HumanName}' (AppID: {tpk.SteamAppId}) => {key}");
 					redeemedAsGift++;
+				} else if (isKeyless) {
+					ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] KEYLESS CLAIMED ({tpk.KeyType}): '{tpk.HumanName}' => {key}");
+					revealedNotForSteam++;
 				} else if (skipSteam) {
 					ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] REVEALED (not redeemed on Steam): '{tpk.HumanName}' (AppID: {tpk.SteamAppId}) => {key}");
 					revealedNotForSteam++;
@@ -350,15 +389,18 @@ internal sealed partial class HumbleRedeemer {
 		await ProcessChoiceOrders(bot, humbleTpks, ownedAppIds, countryCode, ignoreStoreLocation).ConfigureAwait(false);
 
 		// Check if there are still unrevealed keys remaining (matches the predicate in
-		// CompareHumbleBundleWithSteamLibrary — Choice TPKs are always counted, regular-order
-		// unknown-AppId TPKs only count when SkipUnknownAppIds is false).
+		// CompareHumbleBundleWithSteamLibrary — keyless TPKs count only when opted in,
+		// Choice TPKs are always counted, regular-order unknown-AppId TPKs only count when
+		// SkipUnknownAppIds is false).
 		int remainingCount = humbleTpks.Count(t =>
 			string.IsNullOrEmpty(t.RedeemedKeyVal) && !t.IsExpired && !t.SoldOut && !t.IsGift
 			&& IsCountryAllowed(t, countryCode, effectiveIgnoreLocation)
-			&& (t.IsChoiceTpk
-				|| (t.SteamAppId == 0
-					? !skipUnknownAppIds
-					: !ownedAppIds.Contains(t.SteamAppId))));
+			&& (IsKeylessTpk(t)
+				? IsKeylessOptedIn(t, config)
+				: t.IsChoiceTpk
+					|| (t.SteamAppId == 0
+						? !skipUnknownAppIds
+						: !ownedAppIds.Contains(t.SteamAppId))));
 
 		if (remainingCount == 0) {
 			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] All keys redeemed, stopping retry timer");
