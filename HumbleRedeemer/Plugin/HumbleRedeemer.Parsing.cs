@@ -371,6 +371,14 @@ internal sealed partial class HumbleRedeemer {
 						config.RedeemOnSteam = false;
 
 						break;
+					case "HumbleBundleScheduleChoiceCheck" when configValue.ValueKind == JsonValueKind.True:
+						config.ScheduleChoiceCheck = true;
+
+						break;
+					case "HumbleBundleScheduleChoiceCheck" when configValue.ValueKind == JsonValueKind.False:
+						config.ScheduleChoiceCheck = false;
+
+						break;
 				}
 			} catch (Exception ex) {
 				ASF.ArchiLogger.LogGenericException(ex, $"[{botName}] Failed to parse HumbleBundle config property: {configProperty}");

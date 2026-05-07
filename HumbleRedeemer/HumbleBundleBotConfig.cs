@@ -171,6 +171,17 @@ public sealed class HumbleBundleBotConfig {
 	public bool ClaimVaultGames { get; set; } = false;
 
 	/// <summary>
+	/// When true, schedule an in-process one-shot timer that fires on the first Tuesday of every
+	/// month at 10:00 America/Los_Angeles (Pacific Time — Humble Choice's monthly
+	/// release time, DST-aware via <c>TimeZoneInfo</c>) and runs the AutoPay + reveal/redeem
+	/// pipeline so the new month's keys are picked up without waiting for the next ASF restart
+	/// or retry-timer cycle.
+	/// </summary>
+	[JsonInclude]
+	[JsonPropertyName("HumbleBundleScheduleChoiceCheck")]
+	public bool ScheduleChoiceCheck { get; set; } = false;
+
+	/// <summary>
 	/// When true, revealed Steam keys are immediately submitted to Steam via ASF's native
 	/// <c>Bot.Actions.RedeemKey</c>. Gift-link reveals and keys flagged via the
 	/// <c>…ButNotToSteam</c> options are never forwarded to Steam regardless of this setting.

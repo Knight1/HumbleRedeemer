@@ -235,6 +235,10 @@ internal sealed partial class HumbleRedeemer : IBot, IBotModules, IBotSteamClien
 
 		// Store the handler for later use
 		BotHandlers.TryAdd(bot, webHandler);
+
+		// If enabled, schedule the next monthly Humble Choice release check (first Tuesday at
+		// 19:00 Europe/Berlin). No-op when the option is off.
+		ScheduleChoiceReleaseCheck(bot);
 	}
 
 	public async Task OnBotDestroy(Bot bot) {
@@ -249,6 +253,11 @@ internal sealed partial class HumbleRedeemer : IBot, IBotModules, IBotSteamClien
 		if (BotRedeemTimers.TryRemove(bot, out System.Threading.Timer? timer)) {
 			await timer.DisposeAsync().ConfigureAwait(false);
 			ASF.ArchiLogger.LogGenericDebug($"[{bot.BotName}] Redeem retry timer disposed");
+		}
+
+		if (BotChoiceReleaseTimers.TryRemove(bot, out System.Threading.Timer? choiceTimer)) {
+			await choiceTimer.DisposeAsync().ConfigureAwait(false);
+			ASF.ArchiLogger.LogGenericDebug($"[{bot.BotName}] Choice release timer disposed");
 		}
 
 		BotCountryCodes.TryRemove(bot, out _);
