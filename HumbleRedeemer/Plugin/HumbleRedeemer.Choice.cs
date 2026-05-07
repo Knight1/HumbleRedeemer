@@ -30,6 +30,8 @@ internal sealed partial class HumbleRedeemer {
 		bool payMonthlyButNotReveal = choiceConfig?.PayMonthlyButNotReveal ?? false;
 		bool payMonthlyRevealButNotToSteam = choiceConfig?.PayMonthlyRevealButNotToSteam ?? false;
 		bool redeemOnSteam = choiceConfig?.RedeemOnSteam ?? false;
+		bool redeemEpicKeyless = choiceConfig?.RedeemEpicKeyless ?? false;
+		bool redeemGogKeyless = choiceConfig?.RedeemGogKeyless ?? false;
 		HashSet<string> paidChoiceKeys = BotPaidGameKeys.TryGetValue(bot, out HashSet<string>? cpgk) ? cpgk : new HashSet<string>();
 
 		int totalNewlyRevealed = 0;
@@ -44,6 +46,7 @@ internal sealed partial class HumbleRedeemer {
 		int ordersMarkedCompleted = 0;
 		bool steamRateLimited = false;
 		bool choiceMetadataChanged = false;
+		List<string> depletedGames = new();
 
 		foreach (ChoiceOrderInfo choiceOrder in choiceOrders) {
 			try {
@@ -71,7 +74,9 @@ internal sealed partial class HumbleRedeemer {
 				List<ChoiceRedemptionResult> results = await webHandler.ProcessChoiceOrderAsync(
 					choiceOrder.GameKey,
 					choiceOrder.ChoiceUrl,
-					choiceOrder.HumanName
+					choiceOrder.HumanName,
+					redeemEpicKeyless,
+					redeemGogKeyless
 				).ConfigureAwait(false);
 
 				int orderFailureCount = 0;
@@ -105,12 +110,14 @@ internal sealed partial class HumbleRedeemer {
 								KeyIndex = 0,
 								IsGift = false,
 								DisallowedCountries = [],
-								ExclusiveCountries = []
+								ExclusiveCountries = [],
+								IsChoiceTpk = true
 							};
 
 							humbleTpks.Add(tpk);
 						} else {
 							tpk.RedeemedKeyVal = result.Key;
+							tpk.IsChoiceTpk = true;
 						}
 
 						if (wasAlreadyRevealed) {
@@ -167,6 +174,13 @@ internal sealed partial class HumbleRedeemer {
 								t.MachineName.Equals(result.MachineName, StringComparison.OrdinalIgnoreCase) &&
 								t.GameKey.Equals(choiceOrder.GameKey, StringComparison.OrdinalIgnoreCase));
 
+							// Retroactively mark cached entries — older cache files predate IsChoiceTpk
+							// so legacy Choice TPKs default to false; setting it here on touch lets the
+							// unrevealed-count predicate include them in this and future passes.
+							if (existing != null) {
+								existing.IsChoiceTpk = true;
+							}
+
 							if (existing != null && !string.IsNullOrEmpty(existing.RedeemedKeyVal)) {
 								// We already have the key — flake, not a real failure.
 								// No per-game log: same reasoning as the wasAlreadyRevealed branch above.
@@ -177,6 +191,10 @@ internal sealed partial class HumbleRedeemer {
 							ASF.ArchiLogger.LogGenericWarning($"[{bot.BotName}] CHOICE FAILED: '{result.GameName}' from {result.ChoiceTitle} - {result.Error}");
 							totalFailed++;
 							orderFailureCount++;
+
+							if (result.Error == "Depleted") {
+								depletedGames.Add(result.GameName);
+							}
 
 							// Track the failure as an unrevealed placeholder TPK so the
 							// retry-timer's "unrevealed" count includes it. If an existing
@@ -194,7 +212,8 @@ internal sealed partial class HumbleRedeemer {
 									KeyIndex = 0,
 									IsGift = false,
 									DisallowedCountries = [],
-									ExclusiveCountries = []
+									ExclusiveCountries = [],
+									IsChoiceTpk = true
 								});
 								totalFailurePlaceholdersAdded++;
 							} else {
@@ -238,6 +257,10 @@ internal sealed partial class HumbleRedeemer {
 			? $" ({totalFailurePlaceholdersAdded} new placeholders, {totalFailuresAlreadyTracked} already tracked)"
 			: "";
 		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Newly revealed: {totalNewlyRevealed}, Already revealed (cached): {totalAlreadyRevealed}, Failed: {totalFailed}{failurePlaceholderSummary}, Skipped expired/sold-out: {totalSkipped}");
+
+		if (depletedGames.Count > 0) {
+			ASF.ArchiLogger.LogGenericDebug($"[{bot.BotName}] Choice keys depleted by Humble ({depletedGames.Count}, will retry): {string.Join(", ", depletedGames)}");
+		}
 
 		if (totalCompletedSkipped > 0) {
 			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] {totalCompletedSkipped} Choice orders skipped (already complete — delete the bot cache to force re-process)");

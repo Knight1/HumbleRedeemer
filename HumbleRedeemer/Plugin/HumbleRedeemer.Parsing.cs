@@ -379,6 +379,22 @@ internal sealed partial class HumbleRedeemer {
 						config.ScheduleChoiceCheck = false;
 
 						break;
+					case "HumbleBundleRedeemEpicKeyless" when configValue.ValueKind == JsonValueKind.True:
+						config.RedeemEpicKeyless = true;
+
+						break;
+					case "HumbleBundleRedeemEpicKeyless" when configValue.ValueKind == JsonValueKind.False:
+						config.RedeemEpicKeyless = false;
+
+						break;
+					case "HumbleBundleRedeemGogKeyless" when configValue.ValueKind == JsonValueKind.True:
+						config.RedeemGogKeyless = true;
+
+						break;
+					case "HumbleBundleRedeemGogKeyless" when configValue.ValueKind == JsonValueKind.False:
+						config.RedeemGogKeyless = false;
+
+						break;
 				}
 			} catch (Exception ex) {
 				ASF.ArchiLogger.LogGenericException(ex, $"[{botName}] Failed to parse HumbleBundle config property: {configProperty}");

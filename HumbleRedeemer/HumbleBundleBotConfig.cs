@@ -193,6 +193,28 @@ public sealed class HumbleBundleBotConfig {
 	[JsonPropertyName("HumbleBundleRedeemOnSteam")]
 	public bool RedeemOnSteam { get; set; } = false;
 
+	/// <summary>
+	/// When true, also claim Humble Choice games whose only key type is <c>epic_keyless</c>.
+	/// These games have no redeemable key string — selecting them on Humble auto-links the game
+	/// to the Humble account's connected Epic Games account. To avoid wasting a Choice slot on a
+	/// game that cannot be claimed, the plugin only acts on this when the Humble account's
+	/// <c>userOptions.has_epic_account_id</c> is true (i.e. an Epic account is actually linked).
+	/// </summary>
+	[JsonInclude]
+	[JsonPropertyName("HumbleBundleRedeemEpicKeyless")]
+	public bool RedeemEpicKeyless { get; set; } = false;
+
+	/// <summary>
+	/// When true, also claim Humble Choice games whose only key type is <c>gog_keyless</c>.
+	/// These games have no redeemable key string — selecting them on Humble auto-links the game
+	/// to the Humble account's connected GOG account. To avoid wasting a Choice slot on a game
+	/// that cannot be claimed, the plugin only acts on this when the Humble account exposes
+	/// both <c>userOptions.gog_account_id</c> and <c>userOptions.gog_username</c>.
+	/// </summary>
+	[JsonInclude]
+	[JsonPropertyName("HumbleBundleRedeemGogKeyless")]
+	public bool RedeemGogKeyless { get; set; } = false;
+
 	[JsonConstructor]
 	public HumbleBundleBotConfig() { }
 }

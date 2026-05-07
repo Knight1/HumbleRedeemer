@@ -176,14 +176,18 @@ internal sealed partial class HumbleRedeemer {
 		await ProcessChoiceOrders(bot, humbleTpks, ownedAppIds, countryCode, ignoreStoreLocation).ConfigureAwait(false);
 
 		// Start periodic retry timer for keys that couldn't be redeemed (sold out, etc.).
-		// Unknown-AppId TPKs are included only when SkipUnknownAppIds is false (otherwise they
-		// were filtered out and there's nothing to retry).
+		// Choice TPKs always carry SteamAppId=0 (Choice page does not expose it reliably) and
+		// are therefore exempt from the SkipUnknownAppIds gate — otherwise depleted Choice keys
+		// would silently disappear from the unrevealed count even though ProcessChoiceOrders
+		// still retries them. Regular orders keep the existing behaviour: unknown-AppId TPKs
+		// are counted only when SkipUnknownAppIds is false.
 		int remainingUnrevealed = humbleTpks.Count(t =>
 			string.IsNullOrEmpty(t.RedeemedKeyVal) && !t.IsExpired && !t.SoldOut && !t.IsGift
 			&& IsCountryAllowed(t, countryCode, effectiveIgnoreLocation)
-			&& (t.SteamAppId == 0
-				? !skipUnknownAppIds
-				: !ownedAppIds.Contains(t.SteamAppId)));
+			&& (t.IsChoiceTpk
+				|| (t.SteamAppId == 0
+					? !skipUnknownAppIds
+					: !ownedAppIds.Contains(t.SteamAppId))));
 
 		if (remainingUnrevealed > 0) {
 			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] {remainingUnrevealed} keys still unrevealed, starting retry timer");

@@ -106,6 +106,7 @@ internal sealed partial class HumbleRedeemer {
 		int steamSkippedForRateLimit = 0;
 		bool cacheUpdated = false;
 		bool steamRateLimited = false;
+		List<string> depletedGames = new();
 
 		foreach ((HumbleTpkInfo tpk, bool asGift, bool skipSteam) in toRedeem) {
 			HumbleRedeemResult redeem = await webHandler.RedeemKeyAsync(tpk.MachineName, tpk.GameKey, tpk.KeyIndex, asGift).ConfigureAwait(false);
@@ -157,6 +158,10 @@ internal sealed partial class HumbleRedeemer {
 				};
 				ASF.ArchiLogger.LogGenericWarning($"[{bot.BotName}] FAILED TO REDEEM: '{tpk.HumanName}' (AppID: {tpk.SteamAppId}) - {reason}");
 				failed++;
+
+				if (reason == "depleted") {
+					depletedGames.Add(tpk.HumanName);
+				}
 			}
 
 			// Small delay between redemptions to avoid rate limiting
@@ -223,6 +228,10 @@ internal sealed partial class HumbleRedeemer {
 				? $", {steamSkippedForRateLimit} skipped due to Steam rate limit (will retry on next timer cycle)"
 				: "";
 			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Steam redeem results: {steamRedeemed} keys forwarded to Steam{suffix}");
+		}
+
+		if (depletedGames.Count > 0) {
+			ASF.ArchiLogger.LogGenericDebug($"[{bot.BotName}] Keys depleted by Humble ({depletedGames.Count}, will retry): {string.Join(", ", depletedGames)}");
 		}
 
 		// Update cache with redeemed keys
@@ -341,13 +350,15 @@ internal sealed partial class HumbleRedeemer {
 		await ProcessChoiceOrders(bot, humbleTpks, ownedAppIds, countryCode, ignoreStoreLocation).ConfigureAwait(false);
 
 		// Check if there are still unrevealed keys remaining (matches the predicate in
-		// CompareHumbleBundleWithSteamLibrary — unknown-AppId TPKs only count when SkipUnknownAppIds is false).
+		// CompareHumbleBundleWithSteamLibrary — Choice TPKs are always counted, regular-order
+		// unknown-AppId TPKs only count when SkipUnknownAppIds is false).
 		int remainingCount = humbleTpks.Count(t =>
 			string.IsNullOrEmpty(t.RedeemedKeyVal) && !t.IsExpired && !t.SoldOut && !t.IsGift
 			&& IsCountryAllowed(t, countryCode, effectiveIgnoreLocation)
-			&& (t.SteamAppId == 0
-				? !skipUnknownAppIds
-				: !ownedAppIds.Contains(t.SteamAppId)));
+			&& (t.IsChoiceTpk
+				|| (t.SteamAppId == 0
+					? !skipUnknownAppIds
+					: !ownedAppIds.Contains(t.SteamAppId))));
 
 		if (remainingCount == 0) {
 			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] All keys redeemed, stopping retry timer");

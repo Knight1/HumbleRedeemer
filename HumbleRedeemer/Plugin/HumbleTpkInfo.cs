@@ -67,6 +67,17 @@ internal sealed class HumbleTpkInfo {
 	[JsonPropertyName("SteamRedeemAttempted")]
 	internal bool SteamRedeemAttempted { get; set; }
 
+	/// <summary>
+	/// True for TPKs that originated from a Humble Choice month rather than a regular order.
+	/// Choice TPKs always carry <see cref="SteamAppId"/> = 0 (the Choice page does not reliably
+	/// expose Steam app IDs), so the "no app id" predicates used by Compare / Retry must NOT
+	/// treat them as non-Steam vouchers — otherwise <c>HumbleBundleSkipUnknownAppIds = true</c>
+	/// hides legitimate Choice retry candidates from the unrevealed count and the retry loop.
+	/// </summary>
+	[JsonInclude]
+	[JsonPropertyName("IsChoiceTpk")]
+	internal bool IsChoiceTpk { get; set; }
+
 	[JsonConstructor]
 	internal HumbleTpkInfo() { }
 }

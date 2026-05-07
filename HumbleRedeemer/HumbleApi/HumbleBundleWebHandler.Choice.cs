@@ -37,6 +37,13 @@ internal sealed class ChoicePageResult {
 	internal List<string> DisplayOrder { get; set; } = [];
 	internal Dictionary<string, ChoiceGameData> GameData { get; set; } = [];
 	internal HashSet<string> ContentChoicesMade { get; set; } = [];
+
+	// Linked-account info from the page's top-level `userOptions` block. Used to gate
+	// keyless-game claims: choosing an `epic_keyless` / `gog_keyless` game on Humble auto-links
+	// it to the connected account, so without a link the choice slot is wasted.
+	internal bool HasEpicAccountId { get; set; }
+	internal string GogAccountId { get; set; } = "";
+	internal string GogUsername { get; set; } = "";
 }
 
 internal sealed class ChoiceRedemptionResult {
@@ -121,6 +128,21 @@ internal sealed partial class HumbleBundleWebHandler {
 					break;
 				case "contentChoiceOptions" when prop.Value.ValueKind == JsonValueKind.Object:
 					contentChoiceOptions = prop.Value;
+					break;
+				case "userOptions" when prop.Value.ValueKind == JsonValueKind.Object:
+					foreach (JsonProperty userProp in prop.Value.EnumerateObject()) {
+						switch (userProp.Name) {
+							case "has_epic_account_id":
+								result.HasEpicAccountId = userProp.Value.ValueKind == JsonValueKind.True;
+								break;
+							case "gog_account_id" when userProp.Value.ValueKind == JsonValueKind.String:
+								result.GogAccountId = userProp.Value.GetString() ?? "";
+								break;
+							case "gog_username" when userProp.Value.ValueKind == JsonValueKind.String:
+								result.GogUsername = userProp.Value.GetString() ?? "";
+								break;
+						}
+					}
 					break;
 			}
 		}
@@ -390,9 +412,15 @@ internal sealed partial class HumbleBundleWebHandler {
 	}
 
 	/// <summary>
-	/// Process a single Humble Choice order: choose all games and redeem their keys
+	/// Process a single Humble Choice order: choose all games and redeem their keys.
+	/// <paramref name="redeemEpicKeyless"/> / <paramref name="redeemGogKeyless"/> opt-in to
+	/// claiming <c>epic_keyless</c> / <c>gog_keyless</c> games — for these there is no key
+	/// string; selecting them on Humble is the redemption (Humble auto-links the game to the
+	/// connected Epic / GOG account). Both flags are additionally gated by the corresponding
+	/// linked-account fields on the page's <c>userOptions</c>, so a Choice slot is never
+	/// burned on a keyless game we can't actually claim.
 	/// </summary>
-	internal async Task<List<ChoiceRedemptionResult>> ProcessChoiceOrderAsync(string gameKey, string choiceUrl, string humanName) {
+	internal async Task<List<ChoiceRedemptionResult>> ProcessChoiceOrderAsync(string gameKey, string choiceUrl, string humanName, bool redeemEpicKeyless = false, bool redeemGogKeyless = false) {
 		List<ChoiceRedemptionResult> results = [];
 
 		ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Processing Choice: {humanName}");
@@ -414,6 +442,19 @@ internal sealed partial class HumbleBundleWebHandler {
 			return results;
 		}
 
+		bool epicKeylessEligible = redeemEpicKeyless && pageData.HasEpicAccountId;
+		bool gogKeylessEligible = redeemGogKeyless
+			&& !string.IsNullOrEmpty(pageData.GogAccountId)
+			&& !string.IsNullOrEmpty(pageData.GogUsername);
+
+		if (redeemEpicKeyless && !epicKeylessEligible) {
+			ASF.ArchiLogger.LogGenericInfo($"[{BotName}] '{humanName}': skipping epic_keyless games — no Epic account linked on Humble (userOptions.has_epic_account_id is false)");
+		}
+
+		if (redeemGogKeyless && !gogKeylessEligible) {
+			ASF.ArchiLogger.LogGenericInfo($"[{BotName}] '{humanName}': skipping gog_keyless games — no GOG account linked on Humble (userOptions.gog_account_id / gog_username missing)");
+		}
+
 		// Filter game IDs to only those with redeemable keys
 		List<string> gameIds = pageData.DisplayOrder
 			.Where(id => pageData.GameData.ContainsKey(id) && pageData.GameData[id].Tpkds.Count > 0)
@@ -424,14 +465,33 @@ internal sealed partial class HumbleBundleWebHandler {
 			return results;
 		}
 
+		// A tpkd is "redeemable" (and therefore worth choosing) when it's not yet redeemed,
+		// not expired, not sold out, AND either has a regular key type OR is a keyless type
+		// the user has opted into AND has the matching linked account for.
+		bool IsRedeemable(ChoiceGameTpkd t) {
+			if (!string.IsNullOrEmpty(t.RedeemedKeyVal) || t.IsExpired || t.SoldOut) {
+				return false;
+			}
+
+			if (t.KeyType.EndsWith("_keyless", StringComparison.OrdinalIgnoreCase)) {
+				if (t.KeyType.Equals("epic_keyless", StringComparison.OrdinalIgnoreCase)) {
+					return epicKeylessEligible;
+				}
+
+				if (t.KeyType.Equals("gog_keyless", StringComparison.OrdinalIgnoreCase)) {
+					return gogKeylessEligible;
+				}
+
+				return false;
+			}
+
+			return true;
+		}
+
 		// Determine which games need to be chosen (not already chosen and have redeemable keys)
 		List<string> unchosenIds = gameIds
 			.Where(id => !pageData.ContentChoicesMade.Contains(id))
-			.Where(id => pageData.GameData[id].Tpkds.Any(t =>
-				!t.KeyType.EndsWith("_keyless", StringComparison.OrdinalIgnoreCase) &&
-				string.IsNullOrEmpty(t.RedeemedKeyVal) &&
-				!t.IsExpired &&
-				!t.SoldOut))
+			.Where(id => pageData.GameData[id].Tpkds.Any(IsRedeemable))
 			.ToList();
 
 		// Choose content for unchosen games
@@ -463,8 +523,25 @@ internal sealed partial class HumbleBundleWebHandler {
 					continue;
 				}
 
-				// Skip keyless
+				// Keyless: there is no key string. If the user opted in AND the matching
+				// account is linked, ChooseContentAsync above already claimed it on the
+				// linked account — emit a synthetic result so the choice is recorded as
+				// done (and the order can be marked Completed). Otherwise skip.
 				if (tpkd.KeyType.EndsWith("_keyless", StringComparison.OrdinalIgnoreCase)) {
+					bool isEpic = tpkd.KeyType.Equals("epic_keyless", StringComparison.OrdinalIgnoreCase);
+					bool isGog = tpkd.KeyType.Equals("gog_keyless", StringComparison.OrdinalIgnoreCase);
+
+					if ((isEpic && epicKeylessEligible) || (isGog && gogKeylessEligible)) {
+						string platform = isEpic ? "Epic" : "GOG";
+						results.Add(new ChoiceRedemptionResult {
+							GameName = game.Title,
+							MachineName = tpkd.MachineName,
+							KeyType = tpkd.KeyType,
+							Key = $"(keyless: claimed on linked {platform} account)",
+							ChoiceTitle = pageData.Title
+						});
+					}
+
 					continue;
 				}
 
