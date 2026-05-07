@@ -61,6 +61,8 @@ Add HumbleBundle settings directly to your bot's configuration file in `config/<
   "HumbleBundleScheduleChoiceCheck": false,
   "HumbleBundleRedeemEpicKeyless": false,
   "HumbleBundleRedeemGogKeyless": false,
+  "HumbleBundleRedeemBlizzardKeyless": false,
+  "HumbleBundleRedeemOriginKeyless": false,
   "HumbleBundleProxy": ""
 }
 ```
@@ -86,8 +88,10 @@ Add HumbleBundle settings directly to your bot's configuration file in `config/<
 - `HumbleBundlePayMonthlyRevealButNotToSteam` - If `true` (requires `HumbleBundleAutoPayMonthly`), pay and reveal keys for the current month but do not send them to Steam (default: false)
 - `HumbleBundleClaimVaultGames` - If `true`, register all Humble Vault games to the account so they remain accessible after the subscription ends. Games are only claimed once and tracked in the bot cache (default: false)
 - `HumbleBundleScheduleChoiceCheck` - If `true`, schedule an in-process timer that fires on the **first Tuesday of every month at 10:00 America/Los_Angeles** (Pacific Time — Humble Choice's monthly release time, DST-aware) and runs `AutoPayMonthly` (if enabled) plus the full reveal/redeem pipeline. Lets the bot pick up the new month's keys at release time without waiting for the next ASF restart or the periodic retry timer. The timer is rescheduled on every fire, so it survives indefinitely as long as the bot is running (default: false)
-- `HumbleBundleRedeemEpicKeyless` - If `true`, also claim Humble Choice games whose only key type is `epic_keyless`. These games do not produce a redeemable key string — selecting them on Humble auto-links the game to the Humble account's connected Epic Games account. The plugin only acts when the Choice page's `userOptions.has_epic_account_id` is `true` (i.e. an Epic account is actually linked); otherwise the request would fail (default: false)
-- `HumbleBundleRedeemGogKeyless` - If `true`, also claim Humble Choice games whose only key type is `gog_keyless`. Same flow as Epic above — selecting on Humble auto-links to the connected GOG account. The plugin only acts when both `userOptions.gog_account_id` and `userOptions.gog_username` are set on the Choice page (default: false)
+- `HumbleBundleRedeemEpicKeyless` - If `true`, also claim Humble Choice games whose only key type is `epic_keyless`. Selecting them on Humble auto-links the game to the Humble account's connected Epic Games account. The plugin only acts when `has_epic_account_id` is `true` otherwise the request would fail (default: false)
+- `HumbleBundleRedeemGogKeyless` - If `true`, also claim Humble Choice games whose only key type is `gog_keyless`. Same flow as Epic above — selecting on Humble auto-links to the connected GOG account. The plugin only acts when both `gog_account_id` and `gog_username` are set on the Choice page (default: false)
+- `HumbleBundleRedeemBlizzardKeyless` - If `true`, also claim Humble Choice games whose only key type is `blizzard_keyless`. Selecting on Humble auto-links to the connected Battle.net account. The plugin only acts when `has_battlenet_link` is `true` (default: false)
+- `HumbleBundleRedeemOriginKeyless` - If `true`, also claim Humble Choice games whose only key type is `origin_keyless`. Selecting on Humble auto-links to the connected EA / Origin account. The plugin only acts when `origin_is_linked` is `true` (default: false)
 - `HumbleBundleProxy` - Optional HTTP/SOCKS5 proxy URL for all Humble Bundle requests. Required when running on a VPS or cloud server whose IP is blocked by Cloudflare (see [Proxy Support](#proxy-support) below)
 
 ### Proxy Support
