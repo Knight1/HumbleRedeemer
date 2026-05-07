@@ -215,6 +215,26 @@ public sealed class HumbleBundleBotConfig {
 	[JsonPropertyName("HumbleBundleRedeemGogKeyless")]
 	public bool RedeemGogKeyless { get; set; } = false;
 
+	/// <summary>
+	/// When true, also claim Humble Choice games whose only key type is <c>blizzard_keyless</c>
+	/// (e.g. Diablo IV). Same flow as Epic/GOG — selecting on Humble auto-links the game to the
+	/// Humble account's connected Battle.net account. Only acts when the Choice page's
+	/// <c>userOptions.has_battlenet_link</c> is true.
+	/// </summary>
+	[JsonInclude]
+	[JsonPropertyName("HumbleBundleRedeemBlizzardKeyless")]
+	public bool RedeemBlizzardKeyless { get; set; } = false;
+
+	/// <summary>
+	/// When true, also claim Humble Choice games whose only key type is <c>origin_keyless</c>.
+	/// Same flow as the other keyless options — selecting on Humble auto-links the game to the
+	/// Humble account's connected EA / Origin account. Only acts when the Choice page's
+	/// <c>userOptions.origin_is_linked</c> is true.
+	/// </summary>
+	[JsonInclude]
+	[JsonPropertyName("HumbleBundleRedeemOriginKeyless")]
+	public bool RedeemOriginKeyless { get; set; } = false;
+
 	[JsonConstructor]
 	public HumbleBundleBotConfig() { }
 }

@@ -39,11 +39,14 @@ internal sealed class ChoicePageResult {
 	internal HashSet<string> ContentChoicesMade { get; set; } = [];
 
 	// Linked-account info from the page's top-level `userOptions` block. Used to gate
-	// keyless-game claims: choosing an `epic_keyless` / `gog_keyless` game on Humble auto-links
-	// it to the connected account, so without a link the choice slot is wasted.
+	// keyless-game claims: choosing an `epic_keyless` / `gog_keyless` / `blizzard_keyless` /
+	// `origin_keyless` game on Humble auto-links it to the connected account, so without a link
+	// the choice slot is wasted.
 	internal bool HasEpicAccountId { get; set; }
 	internal string GogAccountId { get; set; } = "";
 	internal string GogUsername { get; set; } = "";
+	internal bool HasBattlenetLink { get; set; }
+	internal bool OriginIsLinked { get; set; }
 }
 
 internal sealed class ChoiceRedemptionResult {
@@ -140,6 +143,12 @@ internal sealed partial class HumbleBundleWebHandler {
 								break;
 							case "gog_username" when userProp.Value.ValueKind == JsonValueKind.String:
 								result.GogUsername = userProp.Value.GetString() ?? "";
+								break;
+							case "has_battlenet_link":
+								result.HasBattlenetLink = userProp.Value.ValueKind == JsonValueKind.True;
+								break;
+							case "origin_is_linked":
+								result.OriginIsLinked = userProp.Value.ValueKind == JsonValueKind.True;
 								break;
 						}
 					}
@@ -413,14 +422,16 @@ internal sealed partial class HumbleBundleWebHandler {
 
 	/// <summary>
 	/// Process a single Humble Choice order: choose all games and redeem their keys.
-	/// <paramref name="redeemEpicKeyless"/> / <paramref name="redeemGogKeyless"/> opt-in to
-	/// claiming <c>epic_keyless</c> / <c>gog_keyless</c> games — for these there is no key
-	/// string; selecting them on Humble is the redemption (Humble auto-links the game to the
-	/// connected Epic / GOG account). Both flags are additionally gated by the corresponding
-	/// linked-account fields on the page's <c>userOptions</c>, so a Choice slot is never
-	/// burned on a keyless game we can't actually claim.
+	/// <paramref name="redeemEpicKeyless"/> / <paramref name="redeemGogKeyless"/> /
+	/// <paramref name="redeemBlizzardKeyless"/> / <paramref name="redeemOriginKeyless"/> opt-in
+	/// to claiming <c>epic_keyless</c> / <c>gog_keyless</c> / <c>blizzard_keyless</c> /
+	/// <c>origin_keyless</c> games — for these there is no key string; selecting them on Humble
+	/// is the redemption (Humble auto-links the game to the connected Epic / GOG / Battle.net /
+	/// Origin account). Each flag is additionally gated by the corresponding linked-account
+	/// field on the page's <c>userOptions</c>, so a Choice slot is never burned on a keyless
+	/// game we can't actually claim.
 	/// </summary>
-	internal async Task<List<ChoiceRedemptionResult>> ProcessChoiceOrderAsync(string gameKey, string choiceUrl, string humanName, bool redeemEpicKeyless = false, bool redeemGogKeyless = false) {
+	internal async Task<List<ChoiceRedemptionResult>> ProcessChoiceOrderAsync(string gameKey, string choiceUrl, string humanName, bool redeemEpicKeyless = false, bool redeemGogKeyless = false, bool redeemBlizzardKeyless = false, bool redeemOriginKeyless = false) {
 		List<ChoiceRedemptionResult> results = [];
 
 		ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Processing Choice: {humanName}");
@@ -446,6 +457,8 @@ internal sealed partial class HumbleBundleWebHandler {
 		bool gogKeylessEligible = redeemGogKeyless
 			&& !string.IsNullOrEmpty(pageData.GogAccountId)
 			&& !string.IsNullOrEmpty(pageData.GogUsername);
+		bool blizzardKeylessEligible = redeemBlizzardKeyless && pageData.HasBattlenetLink;
+		bool originKeylessEligible = redeemOriginKeyless && pageData.OriginIsLinked;
 
 		if (redeemEpicKeyless && !epicKeylessEligible) {
 			ASF.ArchiLogger.LogGenericInfo($"[{BotName}] '{humanName}': skipping epic_keyless games — no Epic account linked on Humble (userOptions.has_epic_account_id is false)");
@@ -453,6 +466,14 @@ internal sealed partial class HumbleBundleWebHandler {
 
 		if (redeemGogKeyless && !gogKeylessEligible) {
 			ASF.ArchiLogger.LogGenericInfo($"[{BotName}] '{humanName}': skipping gog_keyless games — no GOG account linked on Humble (userOptions.gog_account_id / gog_username missing)");
+		}
+
+		if (redeemBlizzardKeyless && !blizzardKeylessEligible) {
+			ASF.ArchiLogger.LogGenericInfo($"[{BotName}] '{humanName}': skipping blizzard_keyless games — no Battle.net account linked on Humble (userOptions.has_battlenet_link is false)");
+		}
+
+		if (redeemOriginKeyless && !originKeylessEligible) {
+			ASF.ArchiLogger.LogGenericInfo($"[{BotName}] '{humanName}': skipping origin_keyless games — no Origin account linked on Humble (userOptions.origin_is_linked is false)");
 		}
 
 		// Filter game IDs to only those with redeemable keys
@@ -480,6 +501,14 @@ internal sealed partial class HumbleBundleWebHandler {
 
 				if (t.KeyType.Equals("gog_keyless", StringComparison.OrdinalIgnoreCase)) {
 					return gogKeylessEligible;
+				}
+
+				if (t.KeyType.Equals("blizzard_keyless", StringComparison.OrdinalIgnoreCase)) {
+					return blizzardKeylessEligible;
+				}
+
+				if (t.KeyType.Equals("origin_keyless", StringComparison.OrdinalIgnoreCase)) {
+					return originKeylessEligible;
 				}
 
 				return false;
@@ -530,9 +559,11 @@ internal sealed partial class HumbleBundleWebHandler {
 				if (tpkd.KeyType.EndsWith("_keyless", StringComparison.OrdinalIgnoreCase)) {
 					bool isEpic = tpkd.KeyType.Equals("epic_keyless", StringComparison.OrdinalIgnoreCase);
 					bool isGog = tpkd.KeyType.Equals("gog_keyless", StringComparison.OrdinalIgnoreCase);
+					bool isBlizzard = tpkd.KeyType.Equals("blizzard_keyless", StringComparison.OrdinalIgnoreCase);
+					bool isOrigin = tpkd.KeyType.Equals("origin_keyless", StringComparison.OrdinalIgnoreCase);
 
-					if ((isEpic && epicKeylessEligible) || (isGog && gogKeylessEligible)) {
-						string platform = isEpic ? "Epic" : "GOG";
+					if ((isEpic && epicKeylessEligible) || (isGog && gogKeylessEligible) || (isBlizzard && blizzardKeylessEligible) || (isOrigin && originKeylessEligible)) {
+						string platform = isEpic ? "Epic" : isGog ? "GOG" : isBlizzard ? "Battle.net" : "Origin";
 						results.Add(new ChoiceRedemptionResult {
 							GameName = game.Title,
 							MachineName = tpkd.MachineName,

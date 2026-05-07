@@ -32,6 +32,8 @@ internal sealed partial class HumbleRedeemer {
 		bool redeemOnSteam = choiceConfig?.RedeemOnSteam ?? false;
 		bool redeemEpicKeyless = choiceConfig?.RedeemEpicKeyless ?? false;
 		bool redeemGogKeyless = choiceConfig?.RedeemGogKeyless ?? false;
+		bool redeemBlizzardKeyless = choiceConfig?.RedeemBlizzardKeyless ?? false;
+		bool redeemOriginKeyless = choiceConfig?.RedeemOriginKeyless ?? false;
 		HashSet<string> paidChoiceKeys = BotPaidGameKeys.TryGetValue(bot, out HashSet<string>? cpgk) ? cpgk : new HashSet<string>();
 
 		int totalNewlyRevealed = 0;
@@ -76,7 +78,9 @@ internal sealed partial class HumbleRedeemer {
 					choiceOrder.ChoiceUrl,
 					choiceOrder.HumanName,
 					redeemEpicKeyless,
-					redeemGogKeyless
+					redeemGogKeyless,
+					redeemBlizzardKeyless,
+					redeemOriginKeyless
 				).ConfigureAwait(false);
 
 				int orderFailureCount = 0;

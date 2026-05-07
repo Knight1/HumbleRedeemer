@@ -395,6 +395,22 @@ internal sealed partial class HumbleRedeemer {
 						config.RedeemGogKeyless = false;
 
 						break;
+					case "HumbleBundleRedeemBlizzardKeyless" when configValue.ValueKind == JsonValueKind.True:
+						config.RedeemBlizzardKeyless = true;
+
+						break;
+					case "HumbleBundleRedeemBlizzardKeyless" when configValue.ValueKind == JsonValueKind.False:
+						config.RedeemBlizzardKeyless = false;
+
+						break;
+					case "HumbleBundleRedeemOriginKeyless" when configValue.ValueKind == JsonValueKind.True:
+						config.RedeemOriginKeyless = true;
+
+						break;
+					case "HumbleBundleRedeemOriginKeyless" when configValue.ValueKind == JsonValueKind.False:
+						config.RedeemOriginKeyless = false;
+
+						break;
 				}
 			} catch (Exception ex) {
 				ASF.ArchiLogger.LogGenericException(ex, $"[{botName}] Failed to parse HumbleBundle config property: {configProperty}");
