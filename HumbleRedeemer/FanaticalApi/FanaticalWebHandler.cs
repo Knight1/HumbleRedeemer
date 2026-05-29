@@ -15,6 +15,7 @@ internal sealed partial class FanaticalWebHandler : IDisposable {
 	private const string ApiUserOrderPath = "/api/user/orders/";
 	private const string ApiRefreshAuthPath = "/api/user/refresh-auth";
 	private const string ApiRedeemPath = "/api/user/orders/redeem";
+	private const string ApiAtokCodePath = "/api/user/atok/code";
 
 	private readonly HttpClient HttpClient;
 	private readonly SocketsHttpHandler HttpHandler;

@@ -36,12 +36,13 @@ internal sealed record FanaticalRevealResult(FanaticalRevealOutcome Outcome, str
 
 internal sealed partial class FanaticalWebHandler {
 	/// <summary>
-	/// Attempts to reveal an order item's key via <c>/api/user/orders/redeem</c> with an empty
-	/// <c>atok</c>. Fanatical responds either with the key string directly, or with
-	/// <c>{"key":"email"}</c> when it requires an emailed verification code (which the plugin
-	/// cannot intercept). The caller uses the latter to decide whether to keep going.
+	/// Attempts to reveal an order item's key via <c>/api/user/orders/redeem</c>. With an empty
+	/// <paramref name="atok"/>, Fanatical responds either with the key string directly, or with
+	/// <c>{"key":"email"}</c> when it requires an emailed verification code; the caller can exchange
+	/// that code for an <c>atok</c> via <see cref="SubmitAtokCodeAsync"/> and pass it back here to
+	/// complete the reveal.
 	/// </summary>
-	internal async Task<FanaticalRevealResult> RedeemKeyAsync(string orderId, string bundleId, string productId, string serialId, string itemId) {
+	internal async Task<FanaticalRevealResult> RedeemKeyAsync(string orderId, string bundleId, string productId, string serialId, string itemId, string atok = "") {
 		ArgumentException.ThrowIfNullOrEmpty(orderId);
 		ArgumentException.ThrowIfNullOrEmpty(itemId);
 
@@ -51,15 +52,16 @@ internal sealed partial class FanaticalWebHandler {
 		}
 
 		try {
-			// Body matches the browser's reveal request; atok is empty so Fanatical tells us whether
-			// an emailed code is required rather than us pre-supplying one.
+			// Body matches the browser's reveal request. An empty atok makes Fanatical tell us whether
+			// an emailed code is required; a non-empty atok (from SubmitAtokCodeAsync) completes a
+			// reveal that previously demanded one.
 			string body = "{"
 				+ $"\"oid\":{JsonString(orderId)},"
 				+ $"\"bid\":{JsonString(bundleId)},"
 				+ $"\"pid\":{JsonString(productId)},"
 				+ $"\"serialId\":{JsonString(serialId)},"
 				+ $"\"iid\":{JsonString(itemId)},"
-				+ "\"atok\":\"\""
+				+ $"\"atok\":{JsonString(atok)}"
 				+ "}";
 
 			HttpResponseMessage response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Post, ApiRedeemPath) {
@@ -107,6 +109,54 @@ internal sealed partial class FanaticalWebHandler {
 		} catch (Exception ex) {
 			ASF.ArchiLogger.LogGenericException(ex, $"[{BotName}] Fanatical reveal threw for item {itemId}");
 			return FanaticalRevealResult.Failed;
+		}
+	}
+
+	/// <summary>
+	/// Exchanges the verification code Fanatical emailed (after a reveal returned
+	/// <see cref="FanaticalRevealOutcome.EmailRequired"/>) for an <c>atok</c> token via
+	/// <c>/api/user/atok/code</c>. The response is a bare JSON string (the token). Returns null on
+	/// failure or if the code was rejected.
+	/// </summary>
+	internal async Task<string?> SubmitAtokCodeAsync(string code) {
+		ArgumentException.ThrowIfNullOrEmpty(code);
+
+		if (!HasCredentials) {
+			ASF.ArchiLogger.LogGenericError($"[{BotName}] Cannot submit Fanatical verification code — no credentials");
+			return null;
+		}
+
+		try {
+			string body = $"{{\"code\":{JsonString(code)}}}";
+
+			HttpResponseMessage response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Post, ApiAtokCodePath) {
+				Content = new StringContent(body, Encoding.UTF8, "application/json")
+			}).ConfigureAwait(false);
+
+			string responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+
+			if (!response.IsSuccessStatusCode) {
+				ASF.ArchiLogger.LogGenericError($"[{BotName}] Fanatical verification code rejected: {response.StatusCode}");
+				ASF.ArchiLogger.LogGenericDebug($"[{BotName}] atok/code body: {responseBody[..Math.Min(300, responseBody.Length)]}");
+				return null;
+			}
+
+			try {
+				JsonElement json = responseBody.ToJsonObject<JsonElement>();
+
+				if (json.ValueKind == JsonValueKind.String) {
+					string? atok = json.GetString();
+
+					return string.IsNullOrEmpty(atok) ? null : atok;
+				}
+			} catch (Exception ex) {
+				ASF.ArchiLogger.LogGenericException(ex, $"[{BotName}] Failed to parse Fanatical atok/code response");
+			}
+
+			return null;
+		} catch (Exception ex) {
+			ASF.ArchiLogger.LogGenericException(ex, $"[{BotName}] Fanatical atok/code threw");
+			return null;
 		}
 	}
 

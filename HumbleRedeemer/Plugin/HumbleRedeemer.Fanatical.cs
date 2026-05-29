@@ -389,7 +389,8 @@ internal sealed partial class HumbleRedeemer {
 
 		// Optionally unlock keys via the API before reporting the summary so it reflects what was
 		// revealed. Steam forwarding still happens later from OnLicenseList via ProcessFanaticalKeys.
-		await AttemptFanaticalRevealAsync(bot).ConfigureAwait(false);
+		// interactive: true — this is the startup pass, so prompting for an emailed code is allowed.
+		await AttemptFanaticalRevealAsync(bot, true).ConfigureAwait(false);
 
 		LogFanaticalSummary(bot, mergedKeys, config);
 	}
@@ -449,13 +450,22 @@ internal sealed partial class HumbleRedeemer {
 
 	/// <summary>
 	/// When <c>FanaticalAttemptReveal</c> is enabled, probes Fanatical's reveal endpoint to unlock
-	/// keys without manual browser action. Reveals one unrevealed Steam item first: if Fanatical
-	/// hands back the key (no emailed code needed), every remaining unrevealed Steam item is revealed
-	/// the same way and the freshly-revealed keys are persisted to the cache for the Steam-forward
-	/// pass. If Fanatical demands an emailed code instead (which we cannot intercept), the probe
-	/// stops there and is not repeated this session.
+	/// keys without manual browser action. Reveals one unrevealed Steam item first to learn whether
+	/// an emailed verification code is required:
+	/// <list type="bullet">
+	///   <item>No code needed — every remaining unrevealed Steam item is revealed the same way.</item>
+	///   <item>Code needed and ASF has an attached console (not headless) and this is the interactive
+	///     startup pass — the user is prompted for the code Fanatical just emailed, it is exchanged
+	///     for an <c>atok</c> via <c>/api/user/atok/code</c>, and every item is then revealed with
+	///     that token.</item>
+	///   <item>Code needed but headless / non-interactive — stops after the single probe (which
+	///     already sent one email) and falls back to manual reveal; not repeated this session.</item>
+	/// </list>
+	/// Freshly-revealed keys are persisted to the cache for the later Steam-forward pass.
+	/// <paramref name="interactive"/> gates the console prompt so background retry-timer passes never
+	/// block on <c>Console.ReadLine</c> when nobody is watching.
 	/// </summary>
-	private static async Task AttemptFanaticalRevealAsync(Bot bot) {
+	private static async Task AttemptFanaticalRevealAsync(Bot bot, bool interactive) {
 		if (!FanaticalConfigs.TryGetValue(bot, out FanaticalBotConfig? config) || !config.AttemptReveal) {
 			return;
 		}
@@ -497,13 +507,86 @@ internal sealed partial class HumbleRedeemer {
 		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Fanatical: attempting to reveal {candidates.Count} unrevealed Steam key(s) via the API...");
 
 		bool cacheUpdated = false;
-		bool emailRequired = false;
 		int revealed = 0;
 
-		for (int i = 0; i < candidates.Count && !emailRequired; i++) {
-			FanaticalKeyInfo info = candidates[i];
+		// Step 1: probe the first item with an empty atok to learn whether an emailed code is needed.
+		FanaticalKeyInfo first = candidates[0];
+		FanaticalRevealResult probe = await handler.RedeemKeyAsync(first.OrderId, first.BundleId, first.InternalId, first.SerialId!, first.ItemId).ConfigureAwait(false);
 
-			FanaticalRevealResult result = await handler.RedeemKeyAsync(info.OrderId, info.BundleId, info.InternalId, info.SerialId!, info.ItemId).ConfigureAwait(false);
+		// The verification token applied to every reveal below — empty when no code was required.
+		string atok = "";
+
+		switch (probe.Outcome) {
+			case FanaticalRevealOutcome.Revealed:
+				first.Key = probe.Key;
+				first.Status = "revealed";
+				revealed++;
+				cacheUpdated = true;
+				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Fanatical: revealed key for '{first.Name}'");
+				break;
+
+			case FanaticalRevealOutcome.EmailRequired:
+				bool isHeadless = ASF.GlobalConfig?.Headless ?? true;
+
+				if (isHeadless || !interactive) {
+					FanaticalRevealEmailRequired[bot] = true;
+					ASF.ArchiLogger.LogGenericWarning($"[{bot.BotName}] Fanatical: reveal requires an emailed verification code (sent for '{first.Name}'). {(isHeadless ? "ASF is headless so it cannot be entered" : "Will not prompt during a background retry pass")} — reveal remaining keys manually in your browser; they will be picked up automatically. Skipping further reveal attempts this session.");
+					return;
+				}
+
+				// Interactive console attached: ask for the code Fanatical just emailed and exchange
+				// it for an atok that authorises the reveals.
+				ASF.ArchiLogger.LogGenericWarning($"[{bot.BotName}] Fanatical: reveal requires an emailed verification code (sent for '{first.Name}').");
+				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Please enter the verification code from the Fanatical email:");
+
+				string? code = Console.ReadLine()?.Trim();
+
+				if (string.IsNullOrEmpty(code)) {
+					FanaticalRevealEmailRequired[bot] = true;
+					ASF.ArchiLogger.LogGenericError($"[{bot.BotName}] Fanatical: no verification code entered. Skipping further reveal attempts this session.");
+					return;
+				}
+
+				string? exchanged = await handler.SubmitAtokCodeAsync(code).ConfigureAwait(false);
+
+				if (string.IsNullOrEmpty(exchanged)) {
+					FanaticalRevealEmailRequired[bot] = true;
+					ASF.ArchiLogger.LogGenericError($"[{bot.BotName}] Fanatical: verification code was rejected. Skipping further reveal attempts this session.");
+					return;
+				}
+
+				atok = exchanged;
+
+				// Re-run the first reveal, now with the token.
+				FanaticalRevealResult retry = await handler.RedeemKeyAsync(first.OrderId, first.BundleId, first.InternalId, first.SerialId!, first.ItemId, atok).ConfigureAwait(false);
+
+				if (retry.Outcome != FanaticalRevealOutcome.Revealed) {
+					FanaticalRevealEmailRequired[bot] = true;
+					ASF.ArchiLogger.LogGenericError($"[{bot.BotName}] Fanatical: reveal failed even with the verification code. Skipping further reveal attempts this session.");
+					return;
+				}
+
+				first.Key = retry.Key;
+				first.Status = "revealed";
+				revealed++;
+				cacheUpdated = true;
+				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Fanatical: verification accepted, revealed key for '{first.Name}'");
+				break;
+
+			case FanaticalRevealOutcome.Failed:
+				// Couldn't even probe — don't guess about the rest; let a later pass retry.
+				ASF.ArchiLogger.LogGenericWarning($"[{bot.BotName}] Fanatical: reveal attempt failed for '{first.Name}', skipping reveal this pass");
+				return;
+		}
+
+		// Step 2: reveal the remaining items with the determined token.
+		bool stop = false;
+
+		for (int i = 1; i < candidates.Count && !stop; i++) {
+			await Task.Delay(500).ConfigureAwait(false);
+
+			FanaticalKeyInfo info = candidates[i];
+			FanaticalRevealResult result = await handler.RedeemKeyAsync(info.OrderId, info.BundleId, info.InternalId, info.SerialId!, info.ItemId, atok).ConfigureAwait(false);
 
 			switch (result.Outcome) {
 				case FanaticalRevealOutcome.Revealed:
@@ -514,21 +597,15 @@ internal sealed partial class HumbleRedeemer {
 					ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Fanatical: revealed key for '{info.Name}'");
 					break;
 				case FanaticalRevealOutcome.EmailRequired:
-					// Account/session needs an emailed code we can't read. Stop after this single
-					// probe (which already sent one email) and leave the rest for manual reveal.
+					// Unexpected — the token should have carried the whole batch. Stop rather than
+					// trigger more emails.
 					FanaticalRevealEmailRequired[bot] = true;
-					emailRequired = true;
-					ASF.ArchiLogger.LogGenericWarning($"[{bot.BotName}] Fanatical: reveal requires an emailed verification code (sent for '{info.Name}'). Auto-reveal cannot proceed — reveal remaining keys manually in your browser; they will be picked up automatically. Skipping further reveal attempts this session.");
+					stop = true;
+					ASF.ArchiLogger.LogGenericWarning($"[{bot.BotName}] Fanatical: reveal unexpectedly asked for another code at '{info.Name}', stopping. Reveal the rest manually in your browser.");
 					break;
 				case FanaticalRevealOutcome.Failed:
-					// Transient/unexpected for this item — don't assume the rest will fail, but don't
-					// hammer the endpoint either; move on and let a later pass retry.
 					ASF.ArchiLogger.LogGenericWarning($"[{bot.BotName}] Fanatical: reveal attempt failed for '{info.Name}', skipping");
 					break;
-			}
-
-			if (i < candidates.Count - 1 && !emailRequired) {
-				await Task.Delay(500).ConfigureAwait(false);
 			}
 		}
 
@@ -701,7 +778,8 @@ internal sealed partial class HumbleRedeemer {
 
 		// Try to unlock any still-locked keys via the API (no-op if disabled or an emailed code was
 		// already found to be required this session), then forward whatever is now revealed to Steam.
-		await AttemptFanaticalRevealAsync(bot).ConfigureAwait(false);
+		// interactive: false — runs on a background timer thread, so never block on console input.
+		await AttemptFanaticalRevealAsync(bot, false).ConfigureAwait(false);
 
 		await ProcessFanaticalKeys(bot).ConfigureAwait(false);
 
