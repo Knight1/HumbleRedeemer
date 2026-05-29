@@ -57,6 +57,9 @@ internal sealed partial class HumbleRedeemer : IBot, IBotModules, IBotSteamClien
 
 		if (config == null || !config.Enabled) {
 			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] HumbleBundle integration is disabled");
+			// Fanatical runs independently — a bot configured for Fanatical only (HumbleBundleEnabled=false)
+			// still needs its init pass.
+			await InitFanaticalAsync(bot, additionalConfigProperties).ConfigureAwait(false);
 			return;
 		}
 
@@ -239,6 +242,8 @@ internal sealed partial class HumbleRedeemer : IBot, IBotModules, IBotSteamClien
 		// If enabled, schedule the next monthly Humble Choice release check (first Tuesday at
 		// 19:00 Europe/Berlin). No-op when the option is off.
 		ScheduleChoiceReleaseCheck(bot);
+
+		await InitFanaticalAsync(bot, additionalConfigProperties).ConfigureAwait(false);
 	}
 
 	public async Task OnBotDestroy(Bot bot) {
@@ -260,6 +265,16 @@ internal sealed partial class HumbleRedeemer : IBot, IBotModules, IBotSteamClien
 			ASF.ArchiLogger.LogGenericDebug($"[{bot.BotName}] Choice release timer disposed");
 		}
 
+		if (FanaticalHandlers.TryRemove(bot, out FanaticalWebHandler? fanaticalHandler)) {
+			fanaticalHandler.Dispose();
+			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Fanatical handler disposed");
+		}
+
+		if (FanaticalRetryTimers.TryRemove(bot, out System.Threading.Timer? fanaticalTimer)) {
+			await fanaticalTimer.DisposeAsync().ConfigureAwait(false);
+			ASF.ArchiLogger.LogGenericDebug($"[{bot.BotName}] Fanatical retry timer disposed");
+		}
+
 		BotCountryCodes.TryRemove(bot, out _);
 		BotHumbleTpks.TryRemove(bot, out _);
 		BotChoiceOrders.TryRemove(bot, out _);
@@ -268,6 +283,10 @@ internal sealed partial class HumbleRedeemer : IBot, IBotModules, IBotSteamClien
 		BotCaches.TryRemove(bot, out _);
 		BotPaidGameKeys.TryRemove(bot, out _);
 		BotSteamRedeemRateLimitedUntil.TryRemove(bot, out _);
+		FanaticalConfigs.TryRemove(bot, out _);
+		FanaticalCaches.TryRemove(bot, out _);
+		FanaticalKeys.TryRemove(bot, out _);
+		FanaticalRevealEmailRequired.TryRemove(bot, out _);
 	}
 
 	public Task OnBotSteamCallbacksInit(Bot bot, CallbackManager callbackManager) {

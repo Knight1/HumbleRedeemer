@@ -8,7 +8,7 @@
 
 ## Description
 
-This plugin enables automatic login and session management for HumbleBundle.com within the ASF framework.
+This plugin enables automatic login, key redemption for Steam Keys for HumbleBundle.com for ArchiSteamFarm.
 
 My motivation for this topic came after I read about Steam keys beeing replaced by Epic Games with keyless keys. So you can no longer share that ~~key~~ license after you tried to redeem it.
 
@@ -134,6 +134,83 @@ Add the proxy to your bot configuration:
 - "nintendo_direct"
 - "origin_keyless"
 - "desura"
+
+---
+
+## Fanatical
+
+The plugin can also forward Steam keys you've already revealed on **[Fanatical](https://www.fanatical.com/)** to Steam. It runs alongside the Humble integration and can be enabled per-bot, with or without Humble.
+
+### How it works
+
+Fanatical guards every key reveal behind an emailed verification code, which the plugin **cannot** intercept. By default the plugin therefore does **not** reveal keys — you do that yourself in the browser. Once a key is revealed, Fanatical's API exposes it indefinitely on the order page; the plugin reads those revealed keys and submits them to Steam via ASF's native `Bot.Actions.RedeemKey`.
+
+Some accounts/sessions don't actually require the emailed code. Set `FanaticalAttemptReveal: true` and the plugin will probe the reveal endpoint with one unrevealed Steam key: if Fanatical hands the key back directly, it reveals every remaining unrevealed Steam key the same way and forwards them to Steam. If Fanatical instead demands an emailed code, the plugin stops after that single probe (which itself triggers one email) and falls back to manual reveal — it won't ask again until ASF restarts.
+
+Pipeline:
+
+1. List all your Fanatical orders.
+2. Fetch new orders + re-fetch known orders that still have un-revealed items (so newly revealed keys are picked up automatically).
+3. For every item with `status: "revealed"` and `drm.steam: true`, forward the `key` to Steam.
+4. Persist a per-key `SteamRedeemAttempted` flag so terminal Steam responses (success / already-owned / region-locked / bad code) aren't retried on every cycle.
+5. Repeat on the configured retry interval to catch newly-revealed keys without restarting ASF.
+
+The Steam activation rate limit (30 keys, then 1 every 3 minutes) is shared with the Humble integration — both pause and resume together.
+
+### Authentication
+
+Fanatical's login is reCAPTCHA-protected and cannot be driven headlessly. Instead, paste the auth values from your already-logged-in browser:
+
+1. Log in to [fanatical.com](https://www.fanatical.com/) in your browser.
+2. Open DevTools → **Application** → **Local Storage** → `https://www.fanatical.com`.
+3. Copy the value of **`bsauth`** — it's a JSON object. Run `JSON.parse(localStorage.bsauth).token` in the console (or just extract the `token` field manually) and put that into `FanaticalAuthToken`. The token is an opaque string of the form `<userId>.<uuid>` (NOT a `Bearer …` JWT).
+4. *(Optional but recommended)* Copy the value of **`bsanonymous`** — same trick: `JSON.parse(localStorage.bsanonymous).id` → `FanaticalAnonId`. Fanatical's API accepts requests without it, but the official browser flow always sends it, so providing it makes the plugin look identical to a real browser.
+5. The plugin caches the values and refreshes the token automatically via Fanatical's `/api/user/refresh-auth`. You only need to re-paste them if the cached token is rejected (rare).
+
+You can verify your token works with:
+
+```bash
+curl 'https://www.fanatical.com/api/user/refresh-auth' \
+  -H 'authorization: <your token>' | jq .token
+```
+
+### Configuration
+
+Add to your bot config:
+
+```json
+{
+  "FanaticalEnabled": true,
+  "FanaticalAuthToken": "UserID.UUIDv4",
+  "FanaticalAnonId": "abc123…",
+  "FanaticalRedeemOnSteam": true,
+  "FanaticalAttemptReveal": false,
+  "FanaticalSteamKeysOnly": true,
+  "FanaticalRedeemRetryIntervalMinutes": 60,
+  "FanaticalAutoRetry": true,
+  "FanaticalBlacklistedOrderIds": [],
+  "FanaticalSkipSteamForSlugs": [],
+  "FanaticalProxy": ""
+}
+```
+
+**Configuration Properties:**
+
+- `FanaticalEnabled` — Set to `true` to enable the Fanatical integration for this bot. Independent of `HumbleBundleEnabled` (default: false)
+- `FanaticalAuthToken` — Opaque token from `JSON.parse(localStorage.bsauth).token`. Required for first run; cached + auto-refreshed afterwards
+- `FanaticalAnonId` — *Optional.* Anonymous-id from `JSON.parse(localStorage.bsanonymous).id`. Cached after first use; sent as the `anonid` header when present
+- `FanaticalRedeemOnSteam` — If `true`, every revealed Steam key found in the orders is submitted to Steam via ASF. Items still pending email-reveal are listed in the log so you know what to manually reveal in the browser (default: false)
+- `FanaticalAttemptReveal` — If `true`, the plugin tries to reveal keys via the API instead of waiting for you to do it in the browser. It probes one unrevealed Steam key; if Fanatical returns it without an emailed code, it reveals all remaining unrevealed Steam keys the same way. If Fanatical requires an emailed verification code (which the plugin can't read), it stops after that single probe — which sends one email — and doesn't retry until ASF restarts. Revealed keys are still only forwarded to Steam when `FanaticalRedeemOnSteam` is `true` (default: false)
+- `FanaticalSteamKeysOnly` — If `true` (default), only items with `drm.steam: true` are tracked. Set to `false` to also cache items for other DRM platforms (Origin, Epic, GOG, etc.) — useful purely for visibility (default: true)
+- `FanaticalRedeemRetryIntervalMinutes` — Interval in minutes between retry passes. Each pass re-lists Fanatical orders so newly revealed keys are picked up, and re-attempts any Steam submissions that previously hit a transient failure or rate limit (default: 60)
+- `FanaticalAutoRetry` — If `true`, the periodic retry timer is started after the initial pass. Disable to make Fanatical processing a one-shot per session (default: true)
+- `FanaticalBlacklistedOrderIds` — Fanatical order IDs (24-char hex from the `/orders/{id}` URL) to skip during fetching. Use to permanently exclude problematic orders. Example: `["6983341422d048a55b9b668f"]` (default: [])
+- `FanaticalSkipSteamForSlugs` — Game slugs (URL-friendly identifiers like `easy-delivery-co`) whose revealed keys should NOT be forwarded to Steam, even if they're Steam-DRM. Useful when you want the key cached for gifting/trading but not activated on this bot's account. Example: `["easy-delivery-co"]` (default: [])
+- `FanaticalProxy` — Optional HTTP/SOCKS5 proxy URL for Fanatical requests. Independent of `HumbleBundleProxy` — each integration uses its own handler. Same format as the Humble proxy option
+
+### Per-bot files
+
+Fanatical state is stored next to the bot config as `HumbleRedeemer-Fanatical-<BotName>.cache`. The Humble cache (`HumbleRedeemer-<BotName>.cache`) is separate.
 
 ---
 

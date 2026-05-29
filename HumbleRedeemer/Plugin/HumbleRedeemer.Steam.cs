@@ -122,6 +122,13 @@ internal sealed partial class HumbleRedeemer {
 			// Small delay to ensure ASF finishes processing the license list and populating OwnedPackages
 			await Task.Delay(2000).ConfigureAwait(false);
 			await CompareHumbleBundleWithSteamLibrary(bot).ConfigureAwait(false);
+
+			// Fanatical: forward already-revealed Steam keys (no API redeem step — Fanatical reveals
+			// require an emailed code we can't intercept; the user reveals in-browser, the key
+			// persists in the orders API, we just push it to Steam). Runs after Humble so the two
+			// flows share the same Steam rate-limit window without competing.
+			await ProcessFanaticalKeys(bot).ConfigureAwait(false);
+			StartFanaticalRetryTimer(bot);
 		});
 	}
 
