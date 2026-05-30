@@ -287,6 +287,10 @@ internal sealed partial class HumbleRedeemer : IBot, IBotModules, IBotSteamClien
 		FanaticalCaches.TryRemove(bot, out _);
 		FanaticalKeys.TryRemove(bot, out _);
 		FanaticalRevealEmailRequired.TryRemove(bot, out _);
+
+		if (FanaticalProcessLocks.TryRemove(bot, out System.Threading.SemaphoreSlim? fanaticalProcessLock)) {
+			fanaticalProcessLock.Dispose();
+		}
 	}
 
 	public Task OnBotSteamCallbacksInit(Bot bot, CallbackManager callbackManager) {

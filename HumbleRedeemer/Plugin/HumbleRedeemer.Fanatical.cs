@@ -22,6 +22,14 @@ internal sealed partial class HumbleRedeemer {
 	// verification email on every retry cycle. Reset only on bot restart (entry removed in OnBotDestroy).
 	private static readonly ConcurrentDictionary<Bot, bool> FanaticalRevealEmailRequired = new();
 
+	// Serialises ProcessFanaticalKeys per bot. Steam's LicenseListCallback fires repeatedly during a
+	// session — and each successful key redemption adds a license, which re-fires it — so without a
+	// gate multiple concurrent passes build their candidate lists before any of them sets
+	// SteamRedeemAttempted, and the same revealed key is forwarded to Steam several times
+	// (OK/NoDetail, then AlreadyPurchased, AlreadyPurchased...). A re-entrant pass is simply skipped:
+	// the in-flight run already covers the current candidates, and the retry timer catches stragglers.
+	private static readonly ConcurrentDictionary<Bot, SemaphoreSlim> FanaticalProcessLocks = new();
+
 	/// <summary>
 	/// Parses the Fanatical-specific options out of the bot's <c>additionalConfigProperties</c>.
 	/// Mirrors <see cref="ParseBotConfig"/> but separated for clarity — Fanatical and Humble are
@@ -233,10 +241,13 @@ internal sealed partial class HumbleRedeemer {
 		string? iid = null;
 		string? name = null;
 		string? slug = null;
+		string? type = null;
 		string? status = null;
 		string? key = null;
 		string? serialId = null;
 		bool drmSteam = false;
+		bool drmFree = false;
+		bool noKeyDelivery = false;
 		List<string> drms = new();
 		DateTime? serialExpiry = null;
 
@@ -254,6 +265,9 @@ internal sealed partial class HumbleRedeemer {
 				case "slug" when prop.Value.ValueKind == JsonValueKind.String:
 					slug = prop.Value.GetString();
 					break;
+				case "type" when prop.Value.ValueKind == JsonValueKind.String:
+					type = prop.Value.GetString();
+					break;
 				case "status" when prop.Value.ValueKind == JsonValueKind.String:
 					status = prop.Value.GetString();
 					break;
@@ -262,6 +276,9 @@ internal sealed partial class HumbleRedeemer {
 					break;
 				case "serialId" when prop.Value.ValueKind == JsonValueKind.String:
 					serialId = prop.Value.GetString();
+					break;
+				case "noKeyDelivery" when prop.Value.ValueKind == JsonValueKind.True:
+					noKeyDelivery = true;
 					break;
 				case "serialExpiry" when prop.Value.ValueKind == JsonValueKind.String:
 					if (DateTime.TryParse(prop.Value.GetString(), out DateTime parsed)) {
@@ -276,6 +293,8 @@ internal sealed partial class HumbleRedeemer {
 
 							if (drmProp.Name.Equals("steam", StringComparison.OrdinalIgnoreCase)) {
 								drmSteam = true;
+							} else if (drmProp.Name.Equals("drm_free", StringComparison.OrdinalIgnoreCase)) {
+								drmFree = true;
 							}
 						}
 					}
@@ -287,6 +306,19 @@ internal sealed partial class HumbleRedeemer {
 		// We need at least an iid to dedupe items across re-fetches; without one we can't safely
 		// merge fresh data into the cache.
 		if (string.IsNullOrEmpty(iid)) {
+			return null;
+		}
+
+		// Items with nothing for us to redeem on Steam must be skipped like refunded items — otherwise
+		// their perpetually-empty Key flags the order as "pending" forever, causing endless re-fetches,
+		// and inflates the unrevealed counts. Three signals:
+		//   - type "software": e-learning courses / non-game products (e.g. Mammoth Interactive
+		//     courses redeemed via an external link, not a Steam key). The top-level item loop already
+		//     skips standalone software, but software items can also be nested inside a bundle's games.
+		//   - noKeyDelivery: Fanatical's explicit flag for file-delivered (download) products.
+		//   - drm_free without steam: a DRM-free-only item (comics / books / soundtracks).
+		// Items that are both drm_free and steam (a game sold both ways) keep DrmSteam and stay.
+		if (string.Equals(type, "software", StringComparison.OrdinalIgnoreCase) || noKeyDelivery || (drmFree && !drmSteam)) {
 			return null;
 		}
 
@@ -372,7 +404,7 @@ internal sealed partial class HumbleRedeemer {
 
 			foreach ((string orderId, JsonElement orderData) in fetched) {
 				List<FanaticalKeyInfo> orderKeys = ExtractKeysFromOrder(bot.BotName, orderId, orderData);
-				MergeKeys(mergedKeys, orderKeys);
+				ReconcileOrderKeys(mergedKeys, orderId, orderKeys);
 			}
 
 			cache.KnownOrderIds = new List<string>(allOrderIds);
@@ -393,6 +425,27 @@ internal sealed partial class HumbleRedeemer {
 		await AttemptFanaticalRevealAsync(bot, true).ConfigureAwait(false);
 
 		LogFanaticalSummary(bot, mergedKeys, config);
+	}
+
+	/// <summary>
+	/// Reconciles the cache for a single freshly-fetched order: the fresh fetch is authoritative for
+	/// the order it came from, so cached, still-unrevealed entries for that order that no longer
+	/// appear in the fresh data are pruned. These are items now filtered out as having no key to
+	/// reveal (comics / books / DRM-free downloads) that older plugin versions had cached — without
+	/// pruning they'd linger forever as phantom "unrevealed" items and keep the order flagged as
+	/// pending, causing endless re-fetches. Entries with a revealed <c>Key</c> are never pruned, so a
+	/// transient parse hiccup that yields an empty fresh list can't drop already-redeemed keys.
+	/// After pruning, <see cref="MergeKeys"/> applies the fresh data.
+	/// </summary>
+	private static void ReconcileOrderKeys(List<FanaticalKeyInfo> existing, string orderId, List<FanaticalKeyInfo> fresh) {
+		HashSet<string> freshItemIds = new(fresh.Select(k => k.ItemId), StringComparer.Ordinal);
+
+		existing.RemoveAll(k =>
+			string.Equals(k.OrderId, orderId, StringComparison.Ordinal)
+			&& string.IsNullOrEmpty(k.Key)
+			&& !freshItemIds.Contains(k.ItemId));
+
+		MergeKeys(existing, fresh);
 	}
 
 	/// <summary>
@@ -640,58 +693,72 @@ internal sealed partial class HumbleRedeemer {
 			return;
 		}
 
-		HashSet<string> skipSlugs = new(config.SkipSteamForSlugs, StringComparer.OrdinalIgnoreCase);
+		// Skip if another pass is already running for this bot (a re-fired LicenseListCallback, or an
+		// overlapping retry-timer tick). The in-flight pass already covers the current candidates;
+		// without this guard concurrent passes re-forward the same key before SteamRedeemAttempted lands.
+		SemaphoreSlim processLock = FanaticalProcessLocks.GetOrAdd(bot, static _ => new SemaphoreSlim(1, 1));
 
-		List<FanaticalKeyInfo> candidates = keys
-			.Where(k => k.DrmSteam
-				&& !string.IsNullOrEmpty(k.Key)
-				&& !k.SteamRedeemAttempted
-				&& !string.Equals(k.Status, "refunded", StringComparison.OrdinalIgnoreCase)
-				&& !skipSlugs.Contains(k.Slug))
-			.ToList();
-
-		if (candidates.Count == 0) {
+		if (!await processLock.WaitAsync(0).ConfigureAwait(false)) {
+			ASF.ArchiLogger.LogGenericDebug($"[{bot.BotName}] Fanatical: Steam forwarding already in progress, skipping this pass");
 			return;
 		}
 
-		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Fanatical: forwarding {candidates.Count} revealed Steam keys to Steam...");
+		try {
+			HashSet<string> skipSlugs = new(config.SkipSteamForSlugs, StringComparer.OrdinalIgnoreCase);
 
-		int redeemed = 0;
-		int skippedRateLimit = 0;
-		bool rateLimited = false;
-		bool cacheUpdated = false;
+			List<FanaticalKeyInfo> candidates = keys
+				.Where(k => k.DrmSteam
+					&& !string.IsNullOrEmpty(k.Key)
+					&& !k.SteamRedeemAttempted
+					&& !string.Equals(k.Status, "refunded", StringComparison.OrdinalIgnoreCase)
+					&& !skipSlugs.Contains(k.Slug))
+				.ToList();
 
-		foreach (FanaticalKeyInfo info in candidates) {
-			if (rateLimited) {
-				skippedRateLimit++;
-				continue;
+			if (candidates.Count == 0) {
+				return;
 			}
 
-			SteamRedeemOutcome outcome = await TryRedeemKeyOnSteamAsync(bot, info.Key!, info.Name, 0).ConfigureAwait(false);
+			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Fanatical: forwarding {candidates.Count} revealed Steam keys to Steam...");
 
-			switch (outcome) {
-				case SteamRedeemOutcome.Terminal:
-					info.SteamRedeemAttempted = true;
-					redeemed++;
-					cacheUpdated = true;
-					break;
-				case SteamRedeemOutcome.RateLimited:
-					rateLimited = true;
+			int redeemed = 0;
+			int skippedRateLimit = 0;
+			bool rateLimited = false;
+			bool cacheUpdated = false;
+
+			foreach (FanaticalKeyInfo info in candidates) {
+				if (rateLimited) {
 					skippedRateLimit++;
-					break;
+					continue;
+				}
+
+				SteamRedeemOutcome outcome = await TryRedeemKeyOnSteamAsync(bot, info.Key!, info.Name, 0).ConfigureAwait(false);
+
+				switch (outcome) {
+					case SteamRedeemOutcome.Terminal:
+						info.SteamRedeemAttempted = true;
+						redeemed++;
+						cacheUpdated = true;
+						break;
+					case SteamRedeemOutcome.RateLimited:
+						rateLimited = true;
+						skippedRateLimit++;
+						break;
+				}
+
+				await Task.Delay(500).ConfigureAwait(false);
 			}
 
-			await Task.Delay(500).ConfigureAwait(false);
-		}
+			string suffix = skippedRateLimit > 0
+				? $", {skippedRateLimit} skipped due to Steam rate limit (will retry on next timer cycle)"
+				: "";
+			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Fanatical Steam results: {redeemed} forwarded{suffix}");
 
-		string suffix = skippedRateLimit > 0
-			? $", {skippedRateLimit} skipped due to Steam rate limit (will retry on next timer cycle)"
-			: "";
-		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Fanatical Steam results: {redeemed} forwarded{suffix}");
-
-		if (cacheUpdated) {
-			cache.CachedKeys = keys;
-			await cache.SaveAsync().ConfigureAwait(false);
+			if (cacheUpdated) {
+				cache.CachedKeys = keys;
+				await cache.SaveAsync().ConfigureAwait(false);
+			}
+		} finally {
+			processLock.Release();
 		}
 	}
 
@@ -767,7 +834,7 @@ internal sealed partial class HumbleRedeemer {
 
 			foreach ((string orderId, JsonElement orderData) in fetched) {
 				List<FanaticalKeyInfo> orderKeys = ExtractKeysFromOrder(bot.BotName, orderId, orderData);
-				MergeKeys(mergedKeys, orderKeys);
+				ReconcileOrderKeys(mergedKeys, orderId, orderKeys);
 			}
 
 			cache.KnownOrderIds = new List<string>(allOrderIds);
