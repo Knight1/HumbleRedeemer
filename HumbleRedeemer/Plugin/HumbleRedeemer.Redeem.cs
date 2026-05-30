@@ -134,6 +134,11 @@ internal sealed partial class HumbleRedeemer {
 		bool steamRateLimited = false;
 		List<string> depletedGames = new();
 
+		// Orders whose offering Humble swapped to a different key type (e.g. Steam → GOG), making our
+		// cached machine_name invalid. Collected here and re-fetched after the loop so the replacement
+		// TPK supersedes the stale one.
+		HashSet<string> staleOrderKeys = new(StringComparer.OrdinalIgnoreCase);
+
 		foreach ((HumbleTpkInfo tpk, bool asGift, bool skipSteam) in toRedeem) {
 			HumbleRedeemResult redeem = await webHandler.RedeemKeyAsync(tpk.MachineName, tpk.GameKey, tpk.KeyIndex, asGift).ConfigureAwait(false);
 			string? key = redeem.Key;
@@ -187,6 +192,12 @@ internal sealed partial class HumbleRedeemer {
 				} else if (redeemOnSteam && !asGift && !skipSteam && steamRateLimited) {
 					steamSkippedForRateLimit++;
 				}
+			} else if (redeem.ErrorType == "invalid_key_for_order") {
+				// Humble replaced this order's key with a different platform/type (e.g. Steam → GOG),
+				// so our cached machine_name no longer matches the offering. Queue the order for a
+				// re-fetch; the fresh TPK replaces the stale one and is redeemed on a later pass.
+				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] KEY TYPE CHANGED: '{tpk.HumanName}' (AppID: {tpk.SteamAppId}) — Humble replaced '{tpk.MachineName}' with a different key type; re-fetching order to pick up the replacement");
+				staleOrderKeys.Add(tpk.GameKey);
 			} else {
 				string reason = redeem.ErrorType switch {
 					"keys_depleted_email" => "depleted",
@@ -205,6 +216,13 @@ internal sealed partial class HumbleRedeemer {
 
 			// Small delay between redemptions to avoid rate limiting
 			await Task.Delay(500).ConfigureAwait(false);
+		}
+
+		// Re-fetch any orders whose key type Humble changed, replacing the stale cached TPKs with the
+		// new offering. The replacement keys are redeemed on the next retry-timer pass (they're added
+		// to the shared humbleTpks list, which RetryRedeemAvailableKeys re-processes).
+		if (staleOrderKeys.Count > 0 && await RefreshStaleOrdersAsync(bot, webHandler, humbleTpks, staleOrderKeys).ConfigureAwait(false)) {
+			cacheUpdated = true;
 		}
 
 		// Process keys that were already revealed in a previous run but never sent to Steam.
@@ -279,6 +297,60 @@ internal sealed partial class HumbleRedeemer {
 			await botCache.SaveAsync().ConfigureAwait(false);
 			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Updated cache with {redeemed} newly redeemed keys");
 		}
+	}
+
+	/// <summary>
+	/// Re-fetches orders whose key type Humble changed (signalled by an <c>invalid_key_for_order</c>
+	/// redeem error) and reconciles <paramref name="humbleTpks"/> in place: stale <em>unrevealed</em>
+	/// TPKs for those orders that no longer appear in the fresh order are dropped, and any new TPK
+	/// (e.g. the GOG-keyless replacement of a former Steam key) is added. Already-revealed TPKs are
+	/// never removed, so real keys are preserved. The new TPKs flow through the normal redeem path on
+	/// the next pass. Returns true if anything changed (so the caller persists the cache).
+	/// </summary>
+	private static async Task<bool> RefreshStaleOrdersAsync(Bot bot, HumbleBundleWebHandler webHandler, List<HumbleTpkInfo> humbleTpks, HashSet<string> staleOrderKeys) {
+		ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Re-fetching {staleOrderKeys.Count} order(s) whose key type changed...");
+
+		Dictionary<string, JsonElement>? fetched = await webHandler.GetAllOrdersIndividuallyAsync(staleOrderKeys.ToList()).ConfigureAwait(false);
+
+		if (fetched == null || fetched.Count == 0) {
+			ASF.ArchiLogger.LogGenericWarning($"[{bot.BotName}] Could not re-fetch changed orders; will retry next cycle");
+			return false;
+		}
+
+		bool changed = false;
+
+		foreach ((string orderKey, JsonElement orderData) in fetched) {
+			List<HumbleTpkInfo> fresh = ExtractSteamTpksFromOrder(bot.BotName, orderKey, orderData);
+			HashSet<string> freshIds = new(fresh.Select(t => $"{t.MachineName}#{t.KeyIndex}"), StringComparer.OrdinalIgnoreCase);
+
+			// Drop stale, still-unrevealed TPKs for this order that the fresh offering no longer lists
+			// (the replaced Steam key). Revealed entries keep their real key and are left untouched.
+			int removed = humbleTpks.RemoveAll(t =>
+				t.GameKey.Equals(orderKey, StringComparison.OrdinalIgnoreCase)
+				&& string.IsNullOrEmpty(t.RedeemedKeyVal)
+				&& !freshIds.Contains($"{t.MachineName}#{t.KeyIndex}"));
+
+			// Add any fresh TPK we don't already track (the new replacement key).
+			HashSet<string> existingIds = new(
+				humbleTpks
+					.Where(t => t.GameKey.Equals(orderKey, StringComparison.OrdinalIgnoreCase))
+					.Select(t => $"{t.MachineName}#{t.KeyIndex}"),
+				StringComparer.OrdinalIgnoreCase);
+
+			foreach (HumbleTpkInfo tpk in fresh) {
+				if (existingIds.Add($"{tpk.MachineName}#{tpk.KeyIndex}")) {
+					humbleTpks.Add(tpk);
+					changed = true;
+					ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] REPLACEMENT KEY for order {orderKey}: '{tpk.HumanName}' (type: {tpk.KeyType}, AppID: {tpk.SteamAppId})");
+				}
+			}
+
+			if (removed > 0) {
+				changed = true;
+			}
+		}
+
+		return changed;
 	}
 
 	private static void StartRedeemRetryTimer(Bot bot) {
