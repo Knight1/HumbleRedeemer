@@ -95,6 +95,14 @@ Add HumbleBundle settings directly to your bot's configuration file in `config/<
 - `HumbleBundleRedeemOriginKeyless` - If `true`, claim `origin_keyless` games from both Humble Choice and regular orders. Humble auto-links to the connected EA / Origin account. For Choice the plugin additionally requires `userOptions.origin_is_linked` to be `true` (default: false)
 - `HumbleBundleProxy` - Optional HTTP/SOCKS5 proxy URL for all Humble Bundle requests. Required when running on a VPS or cloud server whose IP is blocked by Cloudflare (see [Proxy Support](#proxy-support) below)
 
+### Automatic key handling
+
+Beyond the configurable options, the plugin keeps your cached order data in sync with what Humble actually offers, so it recovers automatically from the changes Humble makes to orders after purchase — no cache wipe or restart needed:
+
+- **Replaced key types (e.g. Steam → GOG).** If Humble swaps an order's key to a different platform after you've cached it, redeeming the old type returns `invalid_key_for_order`. The plugin detects this, re-fetches the affected order, drops the stale (still-unrevealed) entry, and picks up the replacement key — which is then redeemed on the next pass. Keyless replacements (GOG/Epic/Battle.net/Origin) still require the matching `HumbleBundleRedeem…Keyless` opt-in.
+- **Newly-added Choice keys.** The **current** Humble Choice month is re-checked on every startup (and on every choice-page pass) even once it has been fully redeemed, so keys Humble adds to the month after the fact (e.g. a late "playtest" key) are discovered and redeemed automatically. Past, already-completed months are still skipped to avoid redundant work.
+- **Depleted / sold-out keys** (`keys_depleted_email`) are not treated as permanent failures — they're retried on the periodic timer in case Humble restocks them.
+
 ### Proxy Support
 
 Cloudflare blocks POST requests from datacenter/hosting IP ranges to Humble Bundle's key redemption endpoints (`/humbler/redeemkey`, `/humbler/choosecontent`). If you are running ASF on a VPS or cloud server, you will need a residential proxy to bypass this.
@@ -160,6 +168,16 @@ Pipeline:
 5. Repeat on the configured retry interval to catch newly-revealed keys without restarting ASF.
 
 The Steam activation rate limit (30 keys, then 1 every 3 minutes) is shared with the Humble integration — both pause and resume together.
+
+### What gets skipped / deferred
+
+Fanatical orders frequently bundle items that aren't Steam keys. These are detected and skipped automatically — never tracked, never counted as "pending", never re-fetched in a loop:
+
+- Comics, books and other file/download products (`noKeyDelivery: true`).
+- E-learning courses and other non-game products (`type: software`, typically redeemed via an external link, not a Steam key).
+- DRM-free-only items (`drm.drm_free` with no Steam DRM).
+
+**DLC ordering.** DLC keys are forwarded to Steam **after** the base games in the same batch, so the base game is owned by the time its DLC is submitted. If Steam still reports the required base app isn't owned (`DoesNotOwnRequiredApp`), the DLC is left for a later retry instead of being marked as permanently failed — so it activates automatically once the base game is in the library.
 
 ### Authentication
 
