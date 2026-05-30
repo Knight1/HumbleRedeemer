@@ -125,19 +125,55 @@ internal sealed partial class HumbleBundleWebHandler {
 				return HumbleRedeemResult.MissingGiftKey;
 			}
 
-			// Normal mode: extract the key string
+			// Normal mode: extract the key. Direct (Steam/etc.) redemptions return a plain string.
+			// Keyless platform claims return a nested object instead — e.g. gog_keyless responds
+			// {"key":{"gogUsername":"Knight24","key":"https://www.gog.com/order/status/..."},"success":true}
+			// where the inner `key` is a GOG order-status URL, not a redeemable key, and `success:true`
+			// already means the game was claimed on the linked account. Both shapes are success — only a
+			// genuinely absent/empty key is an error.
 			foreach (JsonProperty prop in responseData.EnumerateObject()) {
-				if (prop.Name.Equals("key", StringComparison.OrdinalIgnoreCase) && prop.Value.ValueKind == JsonValueKind.String) {
+				if (!prop.Name.Equals("key", StringComparison.OrdinalIgnoreCase)) {
+					continue;
+				}
+
+				if (prop.Value.ValueKind == JsonValueKind.String) {
 					string? key = prop.Value.GetString();
 
 					if (!string.IsNullOrEmpty(key)) {
 						ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Successfully redeemed key for '{machineName}'");
 						return new HumbleRedeemResult(key, null, null);
 					}
+				} else if (prop.Value.ValueKind == JsonValueKind.Object) {
+					// Keyless claim: pull out the confirmation URL (and account name, when present) for the log.
+					string? confirmationUrl = null;
+					string? account = null;
+
+					foreach (JsonProperty inner in prop.Value.EnumerateObject()) {
+						switch (inner.Name) {
+							case "key" when inner.Value.ValueKind == JsonValueKind.String:
+								confirmationUrl = inner.Value.GetString();
+								break;
+							case "gogUsername" when inner.Value.ValueKind == JsonValueKind.String:
+								account = inner.Value.GetString();
+								break;
+						}
+					}
+
+					if (!string.IsNullOrEmpty(confirmationUrl)) {
+						ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Keyless claim confirmed for '{machineName}'{(account != null ? $" (account: {account})" : "")}: {confirmationUrl}");
+						return new HumbleRedeemResult(confirmationUrl, null, null);
+					}
+
+					// Object form but no inner URL — still a successful claim (success:true). Let the
+					// caller substitute its synthetic keyless confirmation via the missing_key path.
+					ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Keyless claim confirmed for '{machineName}' (no confirmation URL returned)");
+					return HumbleRedeemResult.MissingKey;
 				}
 			}
 
-			ASF.ArchiLogger.LogGenericError($"[{BotName}] Key not found in redeem response for '{machineName}'");
+			// success:true but no usable key at all — keyless claims legitimately hit this; the caller
+			// recognises missing_key + keyless and substitutes a confirmation, so log at debug not error.
+			ASF.ArchiLogger.LogGenericDebug($"[{BotName}] No key string in redeem response for '{machineName}' (treated as keyless claim if applicable)");
 			return HumbleRedeemResult.MissingKey;
 		} catch (Exception ex) {
 			ASF.ArchiLogger.LogGenericException(ex, $"[{BotName}] Failed to redeem key for '{machineName}'");

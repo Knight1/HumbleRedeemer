@@ -173,7 +173,7 @@ public sealed class HumbleBundleBotConfig {
 	/// <summary>
 	/// When true, schedule an in-process one-shot timer that fires on the first Tuesday of every
 	/// month at 10:00 America/Los_Angeles (Pacific Time — Humble Choice's monthly
-	/// release time, DST-aware via <c>TimeZoneInfo</c>) and runs the AutoPay + reveal/redeem
+	/// release time, DST-aware via manual US Pacific DST rules) and runs the AutoPay + reveal/redeem
 	/// pipeline so the new month's keys are picked up without waiting for the next ASF restart
 	/// or retry-timer cycle.
 	/// </summary>

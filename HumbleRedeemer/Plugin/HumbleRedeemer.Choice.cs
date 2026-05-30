@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
 using ArchiSteamFarm.Core;
 using ArchiSteamFarm.Steam;
@@ -50,6 +52,14 @@ internal sealed partial class HumbleRedeemer {
 		bool choiceMetadataChanged = false;
 		List<string> depletedGames = new();
 
+		// The current month's choice_url (e.g. "may-2026"). The current month is never skipped even
+		// when marked Completed, because Humble can still append keys to it (e.g. a late "playtest"
+		// key) — we must re-check it every pass so those are picked up.
+		DateTime nowUtc = DateTime.UtcNow;
+#pragma warning disable CA1308 // Lowercase required to match Humble's choice_url format
+		string currentChoiceUrl = $"{nowUtc.ToString("MMMM", CultureInfo.InvariantCulture).ToLowerInvariant()}-{nowUtc.Year}";
+#pragma warning restore CA1308
+
 		foreach (ChoiceOrderInfo choiceOrder in choiceOrders) {
 			try {
 				bool isPaidOrder = paidChoiceKeys.Contains(choiceOrder.GameKey);
@@ -62,8 +72,11 @@ internal sealed partial class HumbleRedeemer {
 				// Skip choice months that we've already fully processed in a previous run.
 				// `Completed` is only set after a pass with zero failures, so this never
 				// hides keys we still owe — but it does cut out the redundant page-fetch
-				// + "CHOICE REDEEMED" log spam for finished months.
-				if (choiceOrder.Completed) {
+				// + "CHOICE REDEEMED" log spam for finished months. The CURRENT month is the
+				// exception: Humble can add keys to it after completion, so always re-check it.
+				bool isCurrentMonth = choiceOrder.ChoiceUrl.Equals(currentChoiceUrl, StringComparison.OrdinalIgnoreCase);
+
+				if (choiceOrder.Completed && !isCurrentMonth) {
 					// Per-choice line stays at debug level (only visible when ASF is in debug mode);
 					// the visible summary at the bottom of this method aggregates the count + cache hint.
 					ASF.ArchiLogger.LogGenericDebug($"[{bot.BotName}] CHOICE SKIPPED (already complete): '{choiceOrder.HumanName}'");
@@ -304,5 +317,71 @@ internal sealed partial class HumbleRedeemer {
 			botCache.CachedChoiceOrders = new List<ChoiceOrderInfo>(choiceOrders);
 			await botCache.SaveAsync().ConfigureAwait(false);
 		}
+	}
+
+	/// <summary>
+	/// Re-fetches the order for the <em>current</em> Humble Choice month and appends any TPKs not
+	/// already present in <paramref name="steamTpks"/>. Humble sometimes adds keys to a month after
+	/// the fact (e.g. a late "playtest" key); because a cached month is otherwise never re-fetched,
+	/// such additions would never be discovered. The current month is identified by matching a cached
+	/// Choice order's <c>choice_url</c> (e.g. <c>may-2026</c>) against the current UTC date. Only that
+	/// single order is fetched, so this stays cheap. The merge is purely additive — existing TPK
+	/// entries are left untouched so revealed keys and <c>SteamRedeemAttempted</c> are preserved, and
+	/// the masked <c>redeemed_key_val</c> from the order JSON never overwrites a real revealed key.
+	/// Returns the number of newly-discovered TPKs (which then flow through the normal
+	/// compare/redeem path once added to <paramref name="steamTpks"/>).
+	/// </summary>
+	private static async Task<int> RefreshCurrentChoiceMonthAsync(Bot bot, HumbleBundleWebHandler webHandler, List<ChoiceOrderInfo> choiceOrders, List<string> newGameKeys, List<HumbleTpkInfo> steamTpks) {
+		DateTime now = DateTime.UtcNow;
+#pragma warning disable CA1308 // Lowercase is required to match Humble's choice_url format
+		string monthName = now.ToString("MMMM", CultureInfo.InvariantCulture).ToLowerInvariant();
+#pragma warning restore CA1308
+		string currentChoiceUrl = $"{monthName}-{now.Year}"; // e.g. "may-2026"
+
+		ChoiceOrderInfo? currentMonth = choiceOrders.FirstOrDefault(c => string.Equals(c.ChoiceUrl, currentChoiceUrl, StringComparison.OrdinalIgnoreCase));
+
+		// No subscription this month, or it isn't cached yet.
+		if (currentMonth == null) {
+			return 0;
+		}
+
+		// A brand-new order was already fetched fresh this run — re-fetching would be redundant.
+		if (newGameKeys.Contains(currentMonth.GameKey, StringComparer.OrdinalIgnoreCase)) {
+			return 0;
+		}
+
+		Dictionary<string, JsonElement>? fetched = await webHandler.GetAllOrdersIndividuallyAsync(new List<string> { currentMonth.GameKey }).ConfigureAwait(false);
+
+		if (fetched == null || !fetched.TryGetValue(currentMonth.GameKey, out JsonElement orderData)) {
+			ASF.ArchiLogger.LogGenericDebug($"[{bot.BotName}] Could not re-fetch current Choice month '{currentMonth.HumanName}' to check for new keys");
+			return 0;
+		}
+
+		List<HumbleTpkInfo> freshTpks = ExtractSteamTpksFromOrder(bot.BotName, currentMonth.GameKey, orderData);
+
+		// Key existing TPKs for this order by machine_name + keyindex so we only add genuinely new ones.
+		HashSet<string> existing = new(
+			steamTpks
+				.Where(t => t.GameKey.Equals(currentMonth.GameKey, StringComparison.OrdinalIgnoreCase))
+				.Select(t => $"{t.MachineName}#{t.KeyIndex}"),
+			StringComparer.OrdinalIgnoreCase);
+
+		int added = 0;
+
+		foreach (HumbleTpkInfo tpk in freshTpks) {
+			if (existing.Add($"{tpk.MachineName}#{tpk.KeyIndex}")) {
+				steamTpks.Add(tpk);
+				added++;
+				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] NEW KEY in current Choice month '{currentMonth.HumanName}': '{tpk.HumanName}' ({tpk.KeyType}, AppID: {tpk.SteamAppId})");
+			}
+		}
+
+		if (added > 0) {
+			ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] Current Choice month '{currentMonth.HumanName}': discovered {added} newly-added key(s)");
+		} else {
+			ASF.ArchiLogger.LogGenericDebug($"[{bot.BotName}] Current Choice month '{currentMonth.HumanName}': no new keys");
+		}
+
+		return added;
 	}
 }

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Composition;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -209,6 +210,18 @@ internal sealed partial class HumbleRedeemer : IBot, IBotModules, IBotSteamClien
 				}
 			} else {
 				ASF.ArchiLogger.LogGenericInfo($"[{bot.BotName}] No new orders found, using {steamTpks.Count} cached Steam TPKs");
+			}
+
+			// Re-check the CURRENT Choice month for newly-added keys. Humble occasionally appends
+			// keys to a month after we've already cached it (e.g. a late "playtest" key), and since
+			// a cached month is otherwise never re-fetched those additions would be missed. Only the
+			// current month (one order) is re-fetched, so startups stay cheap. New TPKs are added
+			// without disturbing existing entries (revealed keys / SteamRedeemAttempted preserved).
+			int currentMonthNewTpks = await RefreshCurrentChoiceMonthAsync(bot, webHandler, choiceOrders, newGameKeys, steamTpks).ConfigureAwait(false);
+
+			if (currentMonthNewTpks > 0) {
+				botCache.CachedTpks = steamTpks;
+				await botCache.SaveAsync().ConfigureAwait(false);
 			}
 
 			// Persist Choice metadata so subsequent restarts can call ProcessChoiceOrders

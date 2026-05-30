@@ -19,26 +19,50 @@ internal sealed partial class HumbleRedeemer {
 	/// <summary>
 	/// Returns the next Humble Choice release moment in UTC: the first Tuesday of the
 	/// current or next month at 10:00 America/Los_Angeles. Pacific Time observes DST
-	/// (PST = UTC-8, PDT = UTC-7); <see cref="TimeZoneInfo"/> resolves the right offset
-	/// for the candidate date.
+	/// (PST = UTC-8, PDT = UTC-7); the offset is resolved with manual US DST rules rather
+	/// than <c>TimeZoneInfo</c>, which is stripped from ASF's trimmed runtime (loading it
+	/// throws <c>TypeLoadException</c> for <c>System.TimeZoneInfo</c>).
 	/// </summary>
 	private static DateTime ComputeNextChoiceReleaseUtc(DateTime nowUtc) {
-		TimeZoneInfo pacific = TimeZoneInfo.FindSystemTimeZoneById("America/Los_Angeles");
-		DateTime nowPt = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, pacific);
-		DateTime candidate = FirstTuesdayAt10(nowPt.Year, nowPt.Month);
+		// Approximate Pacific "now" (fixed -8) is precise enough to choose the candidate month;
+		// the exact wall-clock candidate is converted back to UTC with the correct DST offset below.
+		DateTime approxNowPt = nowUtc.AddHours(-8);
+		DateTime candidatePt = FirstTuesdayAt10(approxNowPt.Year, approxNowPt.Month);
 
-		if (candidate <= nowPt) {
-			DateTime nextMonth = new DateTime(nowPt.Year, nowPt.Month, 1).AddMonths(1);
-			candidate = FirstTuesdayAt10(nextMonth.Year, nextMonth.Month);
+		if (candidatePt <= approxNowPt) {
+			DateTime nextMonth = new DateTime(approxNowPt.Year, approxNowPt.Month, 1).AddMonths(1);
+			candidatePt = FirstTuesdayAt10(nextMonth.Year, nextMonth.Month);
 		}
 
-		return TimeZoneInfo.ConvertTimeToUtc(candidate, pacific);
+		// Pacific wall-clock → UTC: add 7h during PDT, 8h during PST.
+		int offsetHours = IsPacificDaylight(candidatePt) ? 7 : 8;
+
+		return candidatePt.AddHours(offsetHours);
 	}
 
 	private static DateTime FirstTuesdayAt10(int year, int month) {
 		DateTime first = new(year, month, 1);
 		int daysToAdd = ((int) DayOfWeek.Tuesday - (int) first.DayOfWeek + 7) % 7;
 		return first.AddDays(daysToAdd).AddHours(10);
+	}
+
+	/// <summary>
+	/// True if the given Pacific wall-clock time falls in US Daylight Saving Time (PDT, UTC-7).
+	/// DST runs from 02:00 on the 2nd Sunday of March to 02:00 on the 1st Sunday of November.
+	/// Implemented manually because <see cref="TimeZoneInfo"/> is unavailable in ASF's runtime.
+	/// </summary>
+	private static bool IsPacificDaylight(DateTime pt) {
+		DateTime dstStart = NthSundayOfMonth(pt.Year, 3, 2).AddHours(2);
+		DateTime dstEnd = NthSundayOfMonth(pt.Year, 11, 1).AddHours(2);
+
+		return pt >= dstStart && pt < dstEnd;
+	}
+
+	private static DateTime NthSundayOfMonth(int year, int month, int n) {
+		DateTime first = new(year, month, 1);
+		int daysToFirstSunday = ((int) DayOfWeek.Sunday - (int) first.DayOfWeek + 7) % 7;
+
+		return first.AddDays(daysToFirstSunday + (7 * (n - 1)));
 	}
 
 	/// <summary>
