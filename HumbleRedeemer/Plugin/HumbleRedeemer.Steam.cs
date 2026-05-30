@@ -183,6 +183,13 @@ internal sealed partial class HumbleRedeemer {
 				case EPurchaseResultDetail.Timeout:
 					ASF.ArchiLogger.LogGenericWarning($"[{bot.BotName}] STEAM REDEEM TRANSIENT FAILURE: {label} => {result}/{detail}");
 					return SteamRedeemOutcome.Transient;
+				case EPurchaseResultDetail.DoesNotOwnRequiredApp:
+					// DLC (or other base-app-gated) key whose required app the account doesn't own yet.
+					// Not a permanent failure — once the base game is redeemed (often later in the same
+					// batch, as DLC is submitted last, or on a later retry) this can succeed. Leave the
+					// attempt flag unset so it is retried rather than burned.
+					ASF.ArchiLogger.LogGenericWarning($"[{bot.BotName}] STEAM REDEEM DEFERRED (base app not owned yet): {label} => {result}/{detail}");
+					return SteamRedeemOutcome.Transient;
 				case EPurchaseResultDetail.RateLimited:
 					DateTime backoffUntil = DateTime.UtcNow.Add(SteamRateLimitBackoff);
 					BotSteamRedeemRateLimitedUntil[bot] = backoffUntil;

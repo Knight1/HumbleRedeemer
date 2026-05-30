@@ -330,6 +330,7 @@ internal sealed partial class HumbleRedeemer {
 			Slug = slug ?? "",
 			DrmSteam = drmSteam,
 			Drms = string.Join(",", drms),
+			IsDlc = string.Equals(type, "dlc", StringComparison.OrdinalIgnoreCase),
 			Status = status ?? "",
 			Key = string.IsNullOrEmpty(key) ? null : key,
 			SerialId = string.IsNullOrEmpty(serialId) ? null : serialId,
@@ -466,6 +467,7 @@ internal sealed partial class HumbleRedeemer {
 				old.Slug = info.Slug;
 				old.DrmSteam = info.DrmSteam;
 				old.Drms = info.Drms;
+				old.IsDlc = info.IsDlc;
 				old.Status = info.Status;
 				old.Key = info.Key;
 				old.SerialId = info.SerialId;
@@ -712,6 +714,9 @@ internal sealed partial class HumbleRedeemer {
 					&& !k.SteamRedeemAttempted
 					&& !string.Equals(k.Status, "refunded", StringComparison.OrdinalIgnoreCase)
 					&& !skipSlugs.Contains(k.Slug))
+				// Redeem base games before their DLC so the base app is owned by the time the DLC is
+				// submitted — otherwise Steam rejects the DLC with DoesNotOwnRequiredApp.
+				.OrderBy(k => k.IsDlc ? 1 : 0)
 				.ToList();
 
 			if (candidates.Count == 0) {

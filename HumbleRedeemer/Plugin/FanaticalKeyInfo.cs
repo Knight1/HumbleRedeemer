@@ -87,6 +87,16 @@ internal sealed class FanaticalKeyInfo {
 	internal string BundleId { get; set; } = "";
 
 	/// <summary>
+	/// True when the item's <c>type</c> is <c>dlc</c>. DLC keys are forwarded to Steam <em>after</em>
+	/// non-DLC items in the same batch, so the base game is owned by the time its DLC is submitted —
+	/// otherwise Steam returns <c>DoesNotOwnRequiredApp</c> (treated as transient, see
+	/// <c>TryRedeemKeyOnSteamAsync</c>), which would otherwise need a full retry cycle to recover.
+	/// </summary>
+	[JsonInclude]
+	[JsonPropertyName("IsDlc")]
+	internal bool IsDlc { get; set; }
+
+	/// <summary>
 	/// Set to true once Steam returned a terminal response (success / already-owned / region-locked /
 	/// bad code) so we don't keep retrying every cycle. Transient failures leave this false so the
 	/// retry timer can pick them up later.
