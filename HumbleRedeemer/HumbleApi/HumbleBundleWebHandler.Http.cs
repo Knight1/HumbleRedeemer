@@ -71,6 +71,9 @@ internal sealed partial class HumbleBundleWebHandler {
 			}
 		}
 
+		// HumbleBundle rotates _simpleauth_sess on ordinary traffic; persist it whenever the server hands us a new one.
+		await PersistRotatedSessionCookieAsync().ConfigureAwait(false);
+
 		return response;
 	}
 }

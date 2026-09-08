@@ -44,6 +44,7 @@ internal sealed partial class HumbleBundleWebHandler {
 				}
 
 				CookieContainer.Add(cookie);
+				LastKnownSessionCookie = savedCookie.Value;
 				loadedCount++;
 				ASF.ArchiLogger.LogGenericDebug($"[{BotName}] Loaded session cookie: {savedCookie.Name} (expires: {savedCookie.Expires?.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) ?? "never"})");
 			}
@@ -89,6 +90,7 @@ internal sealed partial class HumbleBundleWebHandler {
 						HttpOnly = cookie.HttpOnly
 					});
 
+					LastKnownSessionCookie = cookie.Value;
 					cookieFound = true;
 					ASF.ArchiLogger.LogGenericDebug($"[{BotName}] Saved session cookie: {cookie.Name}");
 					break; // Only need the session cookie
@@ -108,6 +110,67 @@ internal sealed partial class HumbleBundleWebHandler {
 		} catch (Exception ex) {
 			ASF.ArchiLogger.LogGenericException(ex, $"[{BotName}] Failed to save HumbleBundle cookies");
 		}
+	}
+
+	/// <summary>
+	/// Persists the current <c>_simpleauth_sess</c> cookie back to the cache when HumbleBundle has
+	/// rotated it since it was last saved. HumbleBundle hands out a refreshed session cookie (new
+	/// value / extended expiry) on ordinary traffic; when we log in with credentials rather than a
+	/// pasted browser cookie the server owns the session, so re-saving the newest value keeps the
+	/// cached session alive across restarts and avoids an unnecessary full re-login.
+	/// </summary>
+	private async Task PersistRotatedSessionCookieAsync() {
+		string? currentSessionCookie = null;
+
+		foreach (Cookie cookie in CookieContainer.GetCookies(new Uri(BaseUrl))) {
+			if (cookie.Name.Equals("_simpleauth_sess", StringComparison.OrdinalIgnoreCase)) {
+				currentSessionCookie = cookie.Value;
+				break;
+			}
+		}
+
+		if (string.IsNullOrEmpty(currentSessionCookie) || (currentSessionCookie == LastKnownSessionCookie)) {
+			return;
+		}
+
+		ASF.ArchiLogger.LogGenericDebug($"[{BotName}] HumbleBundle provided a new session cookie, updating cache");
+		await SaveCookiesAsync().ConfigureAwait(false);
+	}
+
+	/// <summary>
+	/// Interactive fallback used when the 2FA POST can't complete (e.g. Cloudflare blocks it from a
+	/// datacenter IP): prompts for the browser '_simpleauth_sess' cookie, installs it, then verifies
+	/// and persists the session.
+	/// </summary>
+	private async Task<bool> PromptForBrowserSessionCookieAsync() {
+		ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Please log in via your browser and paste the '_simpleauth_sess' cookie value below.");
+		ASF.ArchiLogger.LogGenericInfo($"[{BotName}] (Browser DevTools -> Application -> Cookies -> humblebundle.com -> _simpleauth_sess)");
+
+		string? sessionCookie = Console.ReadLine()?.Trim();
+
+		if (string.IsNullOrEmpty(sessionCookie)) {
+			ASF.ArchiLogger.LogGenericError($"[{BotName}] No session cookie provided");
+			return false;
+		}
+
+		// Strip surrounding quotes if pasted with them
+		sessionCookie = sessionCookie.Trim('"', '\'');
+
+		CookieContainer.Add(new Cookie("_simpleauth_sess", sessionCookie, "/", ".humblebundle.com") {
+			Secure = true,
+			HttpOnly = true
+		});
+
+		IsLoggedIn = await VerifySessionAsync().ConfigureAwait(false);
+
+		if (IsLoggedIn) {
+			ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Successfully logged in via browser session cookie");
+			await SaveCookiesAsync().ConfigureAwait(false);
+		} else {
+			ASF.ArchiLogger.LogGenericError($"[{BotName}] Browser session cookie is invalid or expired");
+		}
+
+		return IsLoggedIn;
 	}
 
 	/// <summary>
@@ -198,6 +261,8 @@ internal sealed partial class HumbleBundleWebHandler {
 
 			string loginResponseText = await loginResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
 
+			bool isHeadless = ASF.GlobalConfig?.Headless ?? true;
+
 			// Check if 2FA is required (can be 401 Unauthorized or 200 OK with 2FA prompt)
 			if (loginResponseText.Contains("two_factor_required", StringComparison.OrdinalIgnoreCase)
 				|| loginResponseText.Contains("humbleguard", StringComparison.OrdinalIgnoreCase)
@@ -215,45 +280,23 @@ internal sealed partial class HumbleBundleWebHandler {
 				}
 
 				if (string.IsNullOrEmpty(twoFactorCode)) {
-					bool isHeadless = ASF.GlobalConfig?.Headless ?? true;
-
-					if (!isHeadless) {
-						// Cloudflare blocks the 2FA POST from datacenter IPs — prompt for browser session cookie instead
-						ASF.ArchiLogger.LogGenericWarning($"[{BotName}] Two-factor authentication required (method: {twoFactorType})");
-						ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Please log in via your browser and paste the '_simpleauth_sess' cookie value below.");
-						ASF.ArchiLogger.LogGenericInfo($"[{BotName}] (Browser DevTools -> Application -> Cookies -> humblebundle.com -> _simpleauth_sess)");
-
-						string? sessionCookie = Console.ReadLine()?.Trim();
-
-						if (string.IsNullOrEmpty(sessionCookie)) {
-							ASF.ArchiLogger.LogGenericError($"[{BotName}] No session cookie provided");
-							return false;
-						}
-
-						// Strip surrounding quotes if pasted with them
-						sessionCookie = sessionCookie.Trim('"', '\'');
-
-						CookieContainer.Add(new Cookie("_simpleauth_sess", sessionCookie, "/", ".humblebundle.com") {
-							Secure = true,
-							HttpOnly = true
-						});
-
-						IsLoggedIn = await VerifySessionAsync().ConfigureAwait(false);
-
-						if (IsLoggedIn) {
-							ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Successfully logged in via browser session cookie");
-							await SaveCookiesAsync().ConfigureAwait(false);
-						} else {
-							ASF.ArchiLogger.LogGenericError($"[{BotName}] Browser session cookie is invalid or expired");
-						}
-
-						return IsLoggedIn;
+					if (isHeadless) {
+						ASF.ArchiLogger.LogGenericWarning($"[{BotName}] Two-factor authentication required but ASF is running in headless mode (method: {twoFactorType})");
+						ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Configure 'HumbleBundleTwoFactorCode', or run ASF with a shell attached to enter a 2FA code or paste a browser session cookie");
+						ASF.ArchiLogger.LogGenericDebug($"[{BotName}] 2FA response: {loginResponseText[..Math.Min(200, loginResponseText.Length)]}");
+						return false;
 					}
 
-					ASF.ArchiLogger.LogGenericWarning($"[{BotName}] Two-factor authentication required but ASF is running in headless mode (method: {twoFactorType})");
-					ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Run ASF with a shell attached to paste a browser session cookie, or configure 'HumbleBundleTwoFactorCode' with a proxy");
-					ASF.ArchiLogger.LogGenericDebug($"[{BotName}] 2FA response: {loginResponseText[..Math.Min(200, loginResponseText.Length)]}");
-					return false;
+					// Interactive: prompt for the rotating 2FA code (Authy/HumbleGuard). Leaving it blank
+					// falls back to pasting a browser session cookie (handy when Cloudflare blocks the 2FA POST).
+					ASF.ArchiLogger.LogGenericWarning($"[{BotName}] Two-factor authentication required (method: {twoFactorType})");
+					ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Please enter your HumbleBundle two-factor code (or leave blank to paste a browser '_simpleauth_sess' cookie instead):");
+
+					twoFactorCode = Console.ReadLine()?.Trim();
+
+					if (string.IsNullOrEmpty(twoFactorCode)) {
+						return await PromptForBrowserSessionCookieAsync().ConfigureAwait(false);
+					}
 				}
 
 				ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Submitting two-factor authentication code (method: {twoFactorType})...");
@@ -284,6 +327,13 @@ internal sealed partial class HumbleBundleWebHandler {
 
 				if (!twoFactorResponse.IsSuccessStatusCode) {
 					ASF.ArchiLogger.LogGenericError($"[{BotName}] Two-factor authentication failed: {twoFactorResponse.StatusCode}");
+
+					// The 2FA POST is frequently Cloudflare-blocked from datacenter IPs; offer the cookie-paste fallback interactively.
+					if (!isHeadless) {
+						ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Falling back to browser session cookie login.");
+						return await PromptForBrowserSessionCookieAsync().ConfigureAwait(false);
+					}
+
 					return false;
 				}
 
@@ -301,11 +351,20 @@ internal sealed partial class HumbleBundleWebHandler {
 			if (IsLoggedIn) {
 				ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Successfully logged in to HumbleBundle");
 				await SaveCookiesAsync().ConfigureAwait(false);
-			} else {
-				ASF.ArchiLogger.LogGenericError($"[{BotName}] Login appeared successful but session verification failed");
+
+				return true;
 			}
 
-			return IsLoggedIn;
+			ASF.ArchiLogger.LogGenericError($"[{BotName}] Login appeared successful but session verification failed");
+
+			// A rejected 2FA code (accepted with 200 but no session) or Cloudflare interference lands here; offer the cookie fallback interactively.
+			if (!isHeadless) {
+				ASF.ArchiLogger.LogGenericInfo($"[{BotName}] Falling back to browser session cookie login.");
+
+				return await PromptForBrowserSessionCookieAsync().ConfigureAwait(false);
+			}
+
+			return false;
 		} catch (Exception ex) {
 			ASF.ArchiLogger.LogGenericException(ex, $"[{BotName}] Exception during HumbleBundle login");
 			return false;

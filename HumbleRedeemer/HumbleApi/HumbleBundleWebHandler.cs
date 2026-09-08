@@ -48,6 +48,11 @@ internal sealed partial class HumbleBundleWebHandler : IDisposable {
 	private bool IsCloudflareBlocked;
 	private bool IsLoggedIn;
 
+	// Value of the _simpleauth_sess cookie last written to the cache. HumbleBundle rotates this
+	// cookie on normal traffic; tracking the persisted value lets us re-save only when it actually
+	// changes (see PersistRotatedSessionCookieAsync).
+	private string? LastKnownSessionCookie;
+
 	internal HumbleBundleWebHandler(HumbleBundleBotCache botCache, string botName, IEnumerable<string>? blacklistedGameKeys = null, string? proxyUrl = null) {
 		ArgumentNullException.ThrowIfNull(botCache);
 		ArgumentException.ThrowIfNullOrEmpty(botName);
