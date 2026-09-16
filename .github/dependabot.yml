@@ -6,9 +6,6 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
-    labels:
-      - "dependencies"
-      - "nuget"
 
   # Monitor GitHub Actions
   - package-ecosystem: "github-actions"
@@ -16,16 +13,10 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
-    labels:
-      - "dependencies"
-      - "github-actions"
 
   # Monitor Git Submodules
   - package-ecosystem: "gitsubmodule"
     directory: "/"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 5
-    labels:
-      - "dependencies"
-      - "submodule"
+    open-pull-requests-limit: 5"
